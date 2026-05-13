@@ -106,3 +106,5 @@ secrets/
 # ------------------------------------------------------------
 *.spec
 pyinstaller-build/
+
+PROJECT_PLAN.md
