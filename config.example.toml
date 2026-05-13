@@ -1,0 +1,50 @@
+# Quoriv configuration example.
+#
+# Copy this file to one of:
+#   ~/.quoriv/config.toml          (global, per-user)
+#   <your-repo>/.quoriv/config.toml  (per-project, overrides global)
+#
+# API keys are NOT stored here. Quoriv keeps them in your OS keychain
+# via the `keyring` library. Use `quoriv config set <provider>` once
+# the CLI is built.
+
+
+[model]
+# Model identifier format: "provider:name".
+#
+# Supported providers (Phase 3):
+#   openai     OpenAI / Azure OpenAI
+#   anthropic  Anthropic Claude
+#   gemini     Google Gemini
+#   ollama     Local Ollama server
+#   vllm       Self-hosted vLLM (OpenAI-compatible endpoint)
+#   openrouter OpenRouter (any model via one key)
+
+# Default model used unless overridden by --model or routing.
+default = "openai:gpt-4.1"
+
+# Cheap/fast model for trivial calls (routing, summarization).
+fast = "openai:gpt-4o-mini"
+
+# Strong model for hard reasoning (planning, coding, debugging).
+strong = "openai:gpt-4.1"
+
+
+[permissions]
+# Default permission posture for new sessions:
+#   "read-only"  Reads allowed; all writes/shell blocked.
+#   "ask"        Prompt before every write or shell call. (default)
+#   "auto"       Auto-run safe tools; prompt for risky ones.
+#   "yolo"       Run everything without prompts. Use with care.
+mode = "ask"
+
+
+[ui]
+# Color theme: "dark" | "light" | "auto"
+theme = "dark"
+
+
+[tools]
+# Names of built-in tools to disable.
+# Available tool names will be listed under `quoriv /tools` once Phase 1 lands.
+disabled = []

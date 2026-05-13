@@ -18,7 +18,7 @@ After `v1.0.0`, the most recent minor version receives security patches for at l
 
 If you believe you have found a vulnerability in Quoriv:
 
-1. Email the maintainer at **shavaiz.butt@aircod.com** with subject `[SECURITY] Quoriv: <short description>`.
+1. Email the maintainer at **hussainburhan207@gmail.com** with subject `[SECURITY] Quoriv: <short description>`.
 2. Include:
    - A description of the issue
    - Steps to reproduce (or a proof-of-concept)

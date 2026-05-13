@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-    { name = "Burhan Hussain", email = "shavaiz.butt@aircod.com" },
+    { name = "Burhan Hussain", email = "hussainburhan207@gmail.com" },
 ]
 keywords = [
     "ai",
@@ -169,7 +169,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR2004", "S101"]
+"tests/**" = [
+    "PLR2004", # magic value comparisons (intentional in tests)
+    "S101",    # assert use (the whole point of tests)
+    "TCH",     # type-checking imports — tests freely mix runtime/type uses
+]
 
 [tool.ruff.format]
 quote-style = "double"
