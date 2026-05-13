@@ -1,0 +1,108 @@
+# ------------------------------------------------------------
+# Python
+# ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+downloads/
+parts/
+sdist/
+wheels/
+share/python-wheels/
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ------------------------------------------------------------
+# Virtual environments
+# ------------------------------------------------------------
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ------------------------------------------------------------
+# Testing & coverage
+# ------------------------------------------------------------
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.tox/
+.nox/
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ------------------------------------------------------------
+# Type checking
+# ------------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ------------------------------------------------------------
+# Ruff
+# ------------------------------------------------------------
+.ruff_cache/
+
+# ------------------------------------------------------------
+# Docs (MkDocs)
+# ------------------------------------------------------------
+site/
+docs/_build/
+
+# ------------------------------------------------------------
+# Editors / IDEs
+# ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------------------------
+# Quoriv-specific
+# ------------------------------------------------------------
+# Local config & memory (user-specific, never commit)
+.quoriv/
+# But DO keep the example config
+!.quoriv/config.example.toml
+
+# Trace logs and SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+traces/
+sessions/
+
+# Environment / secrets
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ------------------------------------------------------------
+# Build artifacts
+# ------------------------------------------------------------
+*.spec
+pyinstaller-build/
