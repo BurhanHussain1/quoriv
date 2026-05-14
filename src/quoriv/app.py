@@ -24,10 +24,15 @@ from rich.console import Console
 from rich.panel import Panel
 
 from quoriv import __version__
-from quoriv.core import build_agent, render_token, render_tool_end, render_tool_start
+from quoriv.core import build_agent, render_tool_end, render_tool_start
 from quoriv.models import MissingAPIKeyError
 from quoriv.permissions import is_read_only
-from quoriv.ui import ApprovalDecision, prompt_approval
+from quoriv.ui import (
+    ApprovalDecision,
+    StreamRenderer,
+    prompt_approval,
+    render_edit_diff,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -246,28 +251,51 @@ async def _stream_events(
     input_payload: Any,
     run_config: RunnableConfig,
 ) -> None:
-    """Pump the agent's event stream into the UI."""
-    async for event in agent.astream_events(input_payload, config=run_config, version="v2"):
-        kind = event.get("event")
-        data = event.get("data", {})
+    """Pump the agent's event stream into the UI.
 
-        if kind == "on_chat_model_stream":
-            chunk = data.get("chunk")
-            if chunk is None:
+    LLM tokens flow through a :class:`StreamRenderer` (markdown-aware via
+    Rich ``Live``). Tool calls render separately — ``edit_file`` gets a
+    colored unified diff via :func:`render_edit_diff`; other tools use
+    the generic header line.
+    """
+    renderer = StreamRenderer(console)
+    try:
+        async for event in agent.astream_events(input_payload, config=run_config, version="v2"):
+            kind = event.get("event")
+            data = event.get("data", {})
+
+            if kind == "on_chat_model_stream":
+                chunk = data.get("chunk")
+                if chunk is None:
+                    continue
+                text = _chunk_text(getattr(chunk, "content", ""))
+                renderer.push(text)
                 continue
-            text = _chunk_text(getattr(chunk, "content", ""))
-            render_token(console, text)
-            continue
 
-        if kind == "on_tool_start":
-            name = event.get("name", "?")
-            tool_args = data.get("input", {})
-            render_tool_start(console, name, tool_args)
-            continue
+            if kind == "on_chat_model_end":
+                renderer.finalize()
+                continue
 
-        if kind == "on_tool_end":
-            render_tool_end(console, data.get("output"))
-            continue
+            if kind == "on_tool_start":
+                renderer.finalize()
+                name = event.get("name", "?")
+                tool_args = data.get("input", {})
+                if name == "edit_file" and isinstance(tool_args, dict):
+                    render_edit_diff(
+                        console,
+                        file_path=str(tool_args.get("file_path", "")),
+                        old_string=str(tool_args.get("old_string", "")),
+                        new_string=str(tool_args.get("new_string", "")),
+                    )
+                else:
+                    render_tool_start(console, name, tool_args)
+                continue
+
+            if kind == "on_tool_end":
+                render_tool_end(console, data.get("output"))
+                continue
+    finally:
+        renderer.finalize()
 
 
 async def _pending_hitl_request(
