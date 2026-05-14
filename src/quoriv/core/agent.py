@@ -39,6 +39,7 @@ from quoriv.permissions import (
     PermissionMode,
     interrupt_on_for_mode,
 )
+from quoriv.tools import QUORIV_TOOLS
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -90,6 +91,7 @@ def build_agent(
     return create_deep_agent(
         model=model,
         backend=backend,
+        tools=list(QUORIV_TOOLS),
         middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))],
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,
