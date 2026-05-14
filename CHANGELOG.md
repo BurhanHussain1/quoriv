@@ -151,6 +151,26 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 
 **Test count: 212 → 254** (+42). All gates green.
 
+#### Phase 1 Slice 7 — SQLite session persistence + `/save` / `/load` / `/resume`
+- `langgraph-checkpoint-sqlite>=2.0.0` added to runtime dependencies (resolves to 3.1.0). `aiosqlite>=0.20.0` was already in place.
+- `quoriv.core.persistence` — new module with:
+  - Path helpers: `quoriv_dir(cwd)`, `db_path(cwd)`, `registry_path(cwd)`, `ensure_quoriv_dir(cwd)`. The agent's SQLite checkpointer lives at `<cwd>/.quoriv/sessions.db` and the named-session sidecar at `<cwd>/.quoriv/sessions.json` (per-project, mirroring how `.git/` is per-repo).
+  - `NamedSession` frozen dataclass: `{name, thread_id, saved_at}` (ISO-8601 UTC timestamp).
+  - `SessionRegistry` — file-backed `name → thread_id` mapping. Loaded on construction, written eagerly on every mutation. Malformed / missing files reset to an empty registry rather than raising — the underlying SQLite DB is the real source of truth, so a corrupted name index is a recoverable convenience-layer issue. Public API: `for_cwd(cwd)`, `save(name, thread_id, *, now=None)`, `load(name)`, `list_named()`, `most_recent()`, `remove(name)`, `path`.
+- `quoriv.core.__init__` re-exports `SessionRegistry`, `NamedSession`, `db_path`, `ensure_quoriv_dir`, `quoriv_dir`, `registry_path`.
+- `quoriv.app.run_chat` rewritten to manage the saver lifecycle:
+  - Resolves `cwd` to an absolute `Path`, calls `ensure_quoriv_dir`, opens `AsyncSqliteSaver.from_conn_string(str(sessions_db))` via `async with`, passes the saver to `build_agent(..., checkpointer=saver)`. The prompt-loop body moved into `_interactive_loop(console, agent, registry, mode)` so the lifecycle stays explicit.
+- New slash commands (with handler helpers `_handle_save`, `_handle_load`, `_handle_resume`, `_print_saved_sessions`):
+  - `/save [name]` — anchor the current thread under `name` (default: first 8 chars of the thread id). Overwrites any prior entry under that name.
+  - `/load` — list saved sessions (most-recent first), or `/load <name>` to switch the active thread.
+  - `/resume` — switch to the most-recently-saved thread (by `saved_at`).
+- `_handle_slash` signature now takes a `SessionRegistry`; legacy commands (`/help`, `/clear`, `/exit`, `/quit`) still work and surface the new entries through `/help`. `SLASH_COMMANDS` extended accordingly.
+- 44 new tests:
+  - `tests/unit/core/test_persistence.py` (26) — path helpers, construction (empty / no-file-on-init), `save` returns/persists/round-trips/overwrites/timestamps, `load` known/unknown, `list_named` ordering, `most_recent` by `saved_at`, `remove` existing/unknown/persists, malformed-file recovery (bad JSON, non-dict root, missing `sessions` key, non-list value, dropped-field entries).
+  - `tests/unit/test_app_slash.py` (18) — `SLASH_COMMANDS` table, `/save` with-name / default-name / reports / empty-thread-id / overwrites, `/load` known / unknown / empty-list / populated-list, `/resume` most-recent / empty-registry, legacy `/exit` / `/quit` / `/clear` / `/help` / unknown-command paths.
+
+**Test count: 254 → 298** (+44). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -170,8 +190,7 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
 - **Slice 5b:** Git **write** ops — `git_add`, `git_commit`, `git_stash` behind `interrupt_on=` (deferred from Slice 5)
 - **Slice 6:** Language-aware `run_tests` tool
-- **Slice 7:** Swap in-memory `MemorySaver` for `SqliteSaver` so sessions survive across restarts
-- **Slice 8:** `/cost`, `/save`, `/load`, `/resume`, `/tools`, `/memory`, `/mode` slash commands + persistent status line
+- **Slice 8:** `/cost`, `/tools`, `/memory`, `/mode` slash commands + persistent status line (`/save` / `/load` / `/resume` already shipped in Slice 7)
 - **Slice 9:** Local JSON trace log + integration tests
 
 ---

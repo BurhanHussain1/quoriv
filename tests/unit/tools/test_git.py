@@ -18,7 +18,6 @@ from quoriv.tools.git import (
     git_status,
 )
 
-
 # ---------------------------------------------------------------------------
 # Repo helpers — deterministic git operations against a real tmp_path repo.
 # ---------------------------------------------------------------------------

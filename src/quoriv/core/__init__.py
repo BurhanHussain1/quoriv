@@ -6,11 +6,12 @@ DeepAgents runtime. It is **not** the agent loop — DeepAgents owns that.
 Modules:
     agent       Build a configured DeepAgent for a session: wires the chosen
                 model, ``LocalShellBackend``, permission mode → ``interrupt_on``,
-                and a checkpointer. Later Phase 1 slices extend with
-                Quoriv-specific tools, ``SqliteSaver`` checkpointing, and
-                memory file loading.
+                Quoriv-specific tools, and a checkpointer (defaults to
+                :class:`AsyncSqliteSaver`).
     events      Rich-rendering helpers for ``agent.astream_events(version="v2")``
                 output: render_token, render_tool_start, render_tool_end.
+    persistence Slice 7 — DB-path helpers and the :class:`SessionRegistry`
+                sidecar mapping user names to ``thread_id`` values.
     routing     (Phase 2) Per-task model routing implemented via ``SubAgent``
                 specs (each subagent declares its own ``model=``), not via
                 custom middleware.
@@ -32,9 +33,23 @@ from __future__ import annotations
 
 from quoriv.core.agent import build_agent
 from quoriv.core.events import render_token, render_tool_end, render_tool_start
+from quoriv.core.persistence import (
+    NamedSession,
+    SessionRegistry,
+    db_path,
+    ensure_quoriv_dir,
+    quoriv_dir,
+    registry_path,
+)
 
 __all__ = [
+    "NamedSession",
+    "SessionRegistry",
     "build_agent",
+    "db_path",
+    "ensure_quoriv_dir",
+    "quoriv_dir",
+    "registry_path",
     "render_token",
     "render_tool_end",
     "render_tool_start",

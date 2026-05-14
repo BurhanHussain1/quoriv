@@ -1,22 +1,28 @@
 """Interactive chat loop driving a DeepAgent.
 
-Day 5 wiring:
+Wiring summary:
     * Build a session-scoped :class:`CompiledStateGraph` via
       :func:`quoriv.core.agent.build_agent`. That agent has the full
       DeepAgents built-in toolset (write_todos, ls, read_file, write_file,
       edit_file, glob, grep, execute, task) plus always-on path protection.
     * Drive the agent via ``agent.astream_events(version="v2")`` and route
       events through :mod:`quoriv.core.events` for rendering.
-    * An in-memory checkpointer keyed by a per-session ``thread_id`` is the
-      conversation state — no manual message-history bookkeeping needed.
+    * Slice 7: :class:`AsyncSqliteSaver` rooted at ``<cwd>/.quoriv/sessions.db``
+      persists conversational state across restarts. The opened saver is
+      passed to :func:`build_agent` so the agent's checkpointer becomes
+      the on-disk DB. A :class:`SessionRegistry` sidecar maps
+      human-friendly names to ``thread_id`` values for the ``/save``,
+      ``/load``, and ``/resume`` slash commands.
 """
 
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -24,9 +30,16 @@ from rich.console import Console
 from rich.panel import Panel
 
 from quoriv import __version__
-from quoriv.core import build_agent, render_tool_end, render_tool_start
+from quoriv.core import (
+    SessionRegistry,
+    build_agent,
+    db_path,
+    ensure_quoriv_dir,
+    render_tool_end,
+    render_tool_start,
+)
 from quoriv.models import MissingAPIKeyError
-from quoriv.permissions import is_read_only
+from quoriv.permissions import PermissionMode, is_read_only
 from quoriv.ui import (
     ApprovalDecision,
     StreamRenderer,
@@ -35,13 +48,9 @@ from quoriv.ui import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from langchain_core.runnables import RunnableConfig
 
     from quoriv.config import QuorivConfig
-
-from quoriv.permissions import PermissionMode
 
 ALLOWED_MODES: tuple[PermissionMode, ...] = ("read-only", "ask", "auto", "yolo")
 
@@ -49,6 +58,9 @@ ALLOWED_MODES: tuple[PermissionMode, ...] = ("read-only", "ask", "auto", "yolo")
 SLASH_COMMANDS: dict[str, str] = {
     "/help": "List available slash commands",
     "/clear": "Start a fresh conversation (new thread)",
+    "/save": "Save the current thread under a name (default: first 8 chars of thread id)",
+    "/load": "Switch to a saved thread by name (no arg lists saved sessions)",
+    "/resume": "Switch to the most-recently-saved thread",
     "/exit": "Exit the chat session",
     "/quit": "Exit the chat session (alias)",
 }
@@ -63,6 +75,11 @@ async def run_chat(
 ) -> None:
     """Run the interactive chat loop until the user exits.
 
+    Opens an :class:`AsyncSqliteSaver` at ``<cwd>/.quoriv/sessions.db``
+    for the duration of the session. The saver is passed to the agent
+    as its checkpointer so conversational state persists across
+    restarts.
+
     Args:
         config: Loaded Quoriv configuration.
         model_override: Optional ``provider:name`` overriding
@@ -72,7 +89,7 @@ async def run_chat(
             ``interrupt_on=`` config by
             :func:`quoriv.permissions.interrupt_on_for_mode`.
         cwd: Repository root for the agent's filesystem and shell.
-            Defaults to ``Path.cwd()`` (resolved inside ``build_agent``).
+            Defaults to ``Path.cwd()``.
     """
     console = Console()
     model_id = model_override or config.model.default
@@ -82,22 +99,38 @@ async def run_chat(
         return
     permission_mode: PermissionMode = mode
 
-    try:
-        agent = build_agent(
-            config,
-            model_override=model_override,
-            cwd=cwd,
-            mode=permission_mode,
-        )
-    except MissingAPIKeyError as exc:
-        _render_missing_key(console, exc)
-        return
-    except Exception as exc:  # pragma: no cover  # surfaces upstream errors
-        console.print(f"[red]Failed to build agent for {model_id!r}:[/red] {exc}")
-        return
+    cwd_path = cwd if cwd is not None else Path.cwd()
+    ensure_quoriv_dir(cwd_path)
+    sessions_db = db_path(cwd_path)
+    registry = SessionRegistry.for_cwd(cwd_path)
 
-    _render_welcome(console, model_id=model_id, mode=mode, cwd=cwd)
+    async with AsyncSqliteSaver.from_conn_string(str(sessions_db)) as saver:
+        try:
+            agent = build_agent(
+                config,
+                model_override=model_override,
+                cwd=cwd_path,
+                mode=permission_mode,
+                checkpointer=saver,
+            )
+        except MissingAPIKeyError as exc:
+            _render_missing_key(console, exc)
+            return
+        except Exception as exc:  # pragma: no cover  # surfaces upstream errors
+            console.print(f"[red]Failed to build agent for {model_id!r}:[/red] {exc}")
+            return
 
+        _render_welcome(console, model_id=model_id, mode=mode, cwd=cwd_path)
+        await _interactive_loop(console, agent, registry, permission_mode)
+
+
+async def _interactive_loop(
+    console: Console,
+    agent: Any,
+    registry: SessionRegistry,
+    permission_mode: PermissionMode,
+) -> None:
+    """Run the prompt → agent → render cycle until the user exits."""
     session: PromptSession[str] = PromptSession()
     thread_id = _new_thread_id()
 
@@ -113,7 +146,7 @@ async def run_chat(
             continue
 
         if user_input.startswith("/"):
-            command_result = _handle_slash(console, user_input, thread_id)
+            command_result = _handle_slash(console, user_input, thread_id, registry)
             if command_result.exit:
                 return
             if command_result.new_thread_id is not None:
@@ -180,9 +213,16 @@ class _SlashResult:
         self.new_thread_id = new_thread_id
 
 
-def _handle_slash(console: Console, raw: str, current_thread_id: str) -> _SlashResult:
+def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one return per command
+    console: Console,
+    raw: str,
+    current_thread_id: str,
+    registry: SessionRegistry,
+) -> _SlashResult:
     """Dispatch a slash command and return what the caller should do next."""
-    cmd = raw.split(maxsplit=1)[0].lower()
+    parts = raw.split(maxsplit=1)
+    cmd = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
 
     if cmd in ("/exit", "/quit"):
         console.print("[dim]Goodbye.[/dim]")
@@ -201,9 +241,88 @@ def _handle_slash(console: Console, raw: str, current_thread_id: str) -> _SlashR
         console.print()
         return _SlashResult()
 
+    if cmd == "/save":
+        return _handle_save(console, arg, current_thread_id, registry)
+
+    if cmd == "/load":
+        return _handle_load(console, arg, registry)
+
+    if cmd == "/resume":
+        return _handle_resume(console, registry)
+
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
-    _ = current_thread_id  # placeholder for future thread-aware commands
     return _SlashResult()
+
+
+def _handle_save(
+    console: Console,
+    name_arg: str,
+    current_thread_id: str,
+    registry: SessionRegistry,
+) -> _SlashResult:
+    """Anchor the current thread under a user-supplied (or default) name."""
+    name = name_arg or current_thread_id[:8]
+    try:
+        record = registry.save(name, current_thread_id)
+    except ValueError as exc:
+        console.print(f"[red]/save:[/red] {exc}")
+        return _SlashResult()
+    console.print(
+        f"[green]Saved[/green] thread [cyan]{record.thread_id[:8]}[/cyan] "
+        f"as [yellow]{record.name!r}[/yellow]."
+    )
+    return _SlashResult()
+
+
+def _handle_load(
+    console: Console,
+    name_arg: str,
+    registry: SessionRegistry,
+) -> _SlashResult:
+    """Switch to a saved thread by name, or list saved sessions if no name."""
+    if not name_arg:
+        _print_saved_sessions(console, registry)
+        return _SlashResult()
+    record = registry.load(name_arg)
+    if record is None:
+        console.print(f"[red]/load:[/red] no saved session named {name_arg!r}")
+        return _SlashResult()
+    console.print(
+        f"[green]Loaded[/green] [yellow]{record.name!r}[/yellow] "
+        f"(thread [cyan]{record.thread_id[:8]}[/cyan])."
+    )
+    return _SlashResult(new_thread_id=record.thread_id)
+
+
+def _handle_resume(console: Console, registry: SessionRegistry) -> _SlashResult:
+    """Switch to the most-recently-saved thread."""
+    record = registry.most_recent()
+    if record is None:
+        console.print("[red]/resume:[/red] no saved sessions yet — use /save first")
+        return _SlashResult()
+    console.print(
+        f"[green]Resumed[/green] [yellow]{record.name!r}[/yellow] "
+        f"(thread [cyan]{record.thread_id[:8]}[/cyan])."
+    )
+    return _SlashResult(new_thread_id=record.thread_id)
+
+
+def _print_saved_sessions(console: Console, registry: SessionRegistry) -> None:
+    """Print a table of saved sessions, most-recent first."""
+    sessions = registry.list_named()
+    if not sessions:
+        console.print(
+            "[dim]No saved sessions yet. Use [cyan]/save [name][/cyan] to anchor "
+            "the current thread.[/dim]"
+        )
+        return
+    console.print()
+    console.print("[bold]Saved sessions[/bold]")
+    for s in sorted(sessions, key=lambda s: s.saved_at, reverse=True):
+        console.print(
+            f"  [yellow]{s.name}[/yellow]  [dim]{s.saved_at}[/dim]  [cyan]{s.thread_id[:8]}[/cyan]"
+        )
+    console.print()
 
 
 # ---------------------------------------------------------------------------
