@@ -84,6 +84,28 @@ With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset ava
 
 **Test count: 108 → 130** (+22). All ruff / ruff format / mypy strict / pytest gates green.
 
+#### Phase 1 Slice 2 — Approval prompt UI for HITL pauses
+- `quoriv.ui.prompts` — new module with `prompt_approval()`, `ApprovalDecision` (frozen dataclass), `parse_choice()`, `READ_ONLY_DENIAL_MESSAGE` constant, `DecisionType` Literal
+- Renders a yellow Rich `Panel` showing tool name, JSON-formatted args, and middleware description; prompts via `prompt_toolkit` for `a/r` (aliases: `approve/reject/y/yes/n/no/deny`)
+- `auto_deny=True` (used in `read-only` mode) renders the panel then auto-rejects with an explanatory message back to the agent
+- `quoriv.app._stream_agent` refactored to `_drive_turn`: loop that streams events, calls `agent.aget_state()` to detect pending HITL interrupts, prompts the user for each `ActionRequest`, and resumes with `Command(resume={"decisions": [...]})`
+- 28 new tests for `parse_choice` (approve/reject aliases, invalid input), `ApprovalDecision` (defaults, frozen behavior), `prompt_approval` (auto_deny path), `_render_approval_panel`, `_format_args`
+
+**Test count: 130 → 158** (+28). All gates green.
+
+#### Phase 1 Slice 3 — Markdown streaming + edit_file diff renderer
+- `quoriv.ui.stream` — new module with `StreamRenderer`: Rich `Live` + `Markdown` wrapper that accumulates streamed tokens and live-renders them with markdown semantics (bold, code blocks, lists, syntax highlighting). Properties: `is_streaming`, `buffer`. Methods: `push(text)`, `finalize() -> str`. Safe to call `finalize` on idle state.
+- `quoriv.ui.diff` — new module with `compute_diff()` (pure function returning `difflib.unified_diff` text) and `render_edit_diff()` (renders the diff with Rich `Syntax(theme="ansi_dark")` and an `edit_file` header line). Handles no-changes and missing-file-path cases.
+- `quoriv.app._stream_events` rewritten:
+  - Each call now owns a `StreamRenderer` instance (lifecycle managed by `try/finally`)
+  - `on_chat_model_stream` → `renderer.push(text)` (replaces raw `render_token`)
+  - `on_chat_model_end` and `on_tool_start` → `renderer.finalize()` to close the Live cleanly
+  - `on_tool_start` for `edit_file` → `render_edit_diff()` (colored unified diff) instead of generic header
+  - All other tools fall through to the existing `render_tool_start` / `render_tool_end`
+- 16 new tests: `test_stream.py` (initial state, empty-push noop, accumulation, finalize semantics, restart after finalize); `test_diff.py` (identical strings → empty diff, change → unified diff, file path in headers, context lines respected, addition/removal only, render handles no-changes and missing path)
+
+**Test count: 158 → 174** (+16). All gates green. Source files: 25 → 27.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -100,9 +122,7 @@ With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset ava
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 1 — remaining slices)
-- **Slice 2:** Approval prompt UI for `interrupt_on` pauses (arrow-key choice; auto-deny in `read-only`)
 - **Slice 1b:** Custom `wrap_tool_call` middleware that enforces `PATH_PROTECTION` against the live agent (DeepAgents 0.6.1 doesn't allow `permissions=` alongside sandbox backends, so we need a custom guard layer)
-- **Slice 3:** Replace plain-text streaming with a markdown-aware Rich `Live` renderer; add a diff renderer for `edit_file` calls
 - **Slice 4:** Quoriv-specific tools as plain callables — tree-sitter `find_symbol` / `go_to_definition` / `find_references`
 - **Slice 5:** Git tools — `git_status`, `git_diff`, `git_log`, `git_blame`
 - **Slice 6:** Language-aware `run_tests` tool
