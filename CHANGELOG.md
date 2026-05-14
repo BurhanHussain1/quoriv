@@ -106,6 +106,51 @@ With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset ava
 
 **Test count: 158 → 174** (+16). All gates green. Source files: 25 → 27.
 
+#### Phase 1 Slice 1b — `PathProtectionMiddleware` (custom guard)
+- `quoriv.permissions.guard` — new module with `PathProtectionMiddleware`, a `langchain.agents.middleware.AgentMiddleware` subclass that enforces `PATH_PROTECTION` deny rules at the middleware layer. Runs in `after_model` (and `aafter_model`), scans the latest `AIMessage.tool_calls` for path-bearing tools, and replaces denied calls with synthetic error `ToolMessage` objects so the agent observes the rejection on its next turn — a hard denial that bypasses HITL.
+- `_TOOL_OPERATION` map covers DeepAgents' built-in filesystem tools (`ls`, `read_file`, `glob`, `grep` → `read`; `write_file`, `edit_file` → `write`). Tools outside the map are treated as path-irrelevant and pass through.
+- `_check_denial` uses `wcmatch.glob.globmatch` with `BRACE | GLOBSTAR` flags — same semantics as DeepAgents' own `FilesystemMiddleware`, so deny patterns match identically whether DeepAgents adopts native sandbox-compatible `permissions=` later or not.
+- `_extract_path` reads `file_path` or `path` from the tool call's args dict (the two argument names DeepAgents' file tools use).
+- `quoriv.permissions.__init__` re-exports `PathProtectionMiddleware` from `guard`.
+- `quoriv.core.agent.build_agent` now wires `middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))]` into `create_deep_agent`. The custom guard layer is required because DeepAgents 0.6.1 raises `NotImplementedError` when `permissions=` is combined with a `SandboxBackendProtocol` backend (which `LocalShellBackend` is) — and we need `LocalShellBackend` for real shell execution.
+- 26 new tests in `tests/unit/permissions/test_guard.py` covering: rule passthrough, allow-rule precedence, every denied tool name (write/edit/read/ls/glob/grep), path arg variants (`file_path` vs `path`), glob patterns (`*.env`, `.git/**`, `secrets/**`), unrelated tools passing through, no-AIMessage / no-tool-calls early exits, multiple tool calls in one message (some denied, some kept), `aafter_model` delegating to sync, immutable rules view, and integration with `PATH_PROTECTION` itself.
+
+**Test count: 174 → 200** (+26). All gates green.
+
+#### Phase 1 Slice 4 (minimal) — Python `find_symbol` tool
+- `quoriv.tools.ast_tools` — new module with `find_symbol`, a `@tool`-decorated callable that walks `*.py` files under a path and returns every definition matching a target name. Returns a list of records: `{file, lineno, col_offset, kind, name, parent}`.
+- Symbol kinds: `function`, `async_function`, `class`, `variable` (module/class-level `Name = ...` assignments). Methods recurse one level into class bodies and report `parent=<ClassName>`.
+- Implementation uses the stdlib `ast` module only — no tree-sitter yet. Skips `.venv`, `venv`, `__pycache__`, `.git`, `build`, `dist` directories so third-party code doesn't pollute results. Silently skips files that fail to parse or decode.
+- Accepts either a directory or a single file path. Nonexistent paths return `[]`.
+- `quoriv.tools.__init__` — `QUORIV_TOOLS = [find_symbol]`; `quoriv.core.agent` registers it via `tools=list(QUORIV_TOOLS)` in `create_deep_agent`. The DeepAgents built-ins (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, `task`, `write_todos`) remain — `find_symbol` is purely additive.
+- 12 new tests in `tests/unit/tools/test_ast_tools.py` covering: function / async function / class / method-with-parent / module-level variable / no-match / subdirectory recursion / `.venv` + `__pycache__` skip / syntactically broken file skip / nonexistent path / single-file path / BaseTool registration.
+
+Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_references`) is deferred.
+
+**Test count: 200 → 212** (+12). All gates green.
+
+#### Phase 1 Slice 5 — Git tools (read-only)
+- `quoriv.tools.git` — new module with four plain `@tool` callables shelling out to `git` via `subprocess.run` (`shell=False`, list args, `cwd`-bound, UTF-8 decoded with `errors="replace"`):
+  - `git_status(cwd=".")` — returns `{branch, ahead, behind, is_clean, files}` (each file: `{path, index, worktree, old_path?}`). Detached HEAD reports `branch=None`. Renames keep `old_path`.
+  - `git_diff(path=None, staged=False, revision_range=None, cwd=".")` — returns `{diff, is_empty}`. Combines path scoping with working-tree, staged (`--cached`), or revision-range diffs.
+  - `git_log(limit=20, path=None, cwd=".")` — returns `{entries, count}` where each entry is `{sha, short_sha, author, email, date, subject}`. Uses `\x1f` field separator + ISO dates for unambiguous parsing.
+  - `git_blame(file, line_start=None, line_end=None, cwd=".")` — returns `{file, entries}` with `{sha, author, date, lineno, content}` per line. `-L start,end` (or single line) scopes the blame.
+- Uniform failure shape across all four tools: `{"error": "<message>"}` for non-zero git exit, not-a-repo errors, missing-file errors, invalid args (e.g., `limit < 1`), and the `git`-not-on-PATH case (`FileNotFoundError` → `"git executable not found on PATH (...)"`).
+- Parser helpers `_parse_status_porcelain` and `_parse_branch_line` are exported for direct unit tests. Branch line covers `## main`, `## main...origin/main`, `[ahead N]`, `[behind M]`, `[ahead N, behind M]`, and `## HEAD (no branch)`.
+- Write operations (`git add` / `git commit` / `git stash` / ...) are intentionally **not** in this slice — they land later behind `interrupt_on=` so HITL prompts before mutating the working tree.
+- `quoriv.tools.__init__` — `QUORIV_TOOLS` now exposes `[find_symbol, git_status, git_diff, git_log, git_blame]`; `__all__` re-exports each tool by name.
+- 42 new tests in `tests/unit/tools/test_git.py`:
+  - `TestParseBranchLine` (6) — every branch-line variant
+  - `TestParseStatusPorcelain` (6) — modified / staged / untracked / rename / too-short / malformed
+  - `TestGitStatus` (6) — clean repo, untracked file, modified-then-staged, not-a-repo, `FileNotFoundError` for missing git binary, default-`cwd` via `monkeypatch.chdir`
+  - `TestGitDiff` (7) — no-changes, working-tree, staged, revision range, path scoping, not-a-repo, bad revision
+  - `TestGitLog` (7) — reverse-chronological ordering, entry-field shape, limit, path filter, invalid `limit`, empty repo, not-a-repo
+  - `TestGitBlame` (5) — full-file, line range, single line, missing file, not-a-repo
+  - `TestToolRegistration` (5) — each tool is a `BaseTool` with the right `.name` and is present in `QUORIV_TOOLS`
+- Test infrastructure: a small in-file helper trio (`_git`, `_init_repo`, `_commit`) builds deterministic repos by pinning `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env vars and `commit.gpgsign=false` per repo so tests are stable across hosts.
+
+**Test count: 212 → 254** (+42). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -122,9 +167,8 @@ With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset ava
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 1 — remaining slices)
-- **Slice 1b:** Custom `wrap_tool_call` middleware that enforces `PATH_PROTECTION` against the live agent (DeepAgents 0.6.1 doesn't allow `permissions=` alongside sandbox backends, so we need a custom guard layer)
-- **Slice 4:** Quoriv-specific tools as plain callables — tree-sitter `find_symbol` / `go_to_definition` / `find_references`
-- **Slice 5:** Git tools — `git_status`, `git_diff`, `git_log`, `git_blame`
+- **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
+- **Slice 5b:** Git **write** ops — `git_add`, `git_commit`, `git_stash` behind `interrupt_on=` (deferred from Slice 5)
 - **Slice 6:** Language-aware `run_tests` tool
 - **Slice 7:** Swap in-memory `MemorySaver` for `SqliteSaver` so sessions survive across restarts
 - **Slice 8:** `/cost`, `/save`, `/load`, `/resume`, `/tools`, `/memory`, `/mode` slash commands + persistent status line

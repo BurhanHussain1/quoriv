@@ -13,7 +13,9 @@ Modules:
     ast_tools   Slice 4 ships a Python-only ``find_symbol``. Slice 4b adds
                 tree-sitter-based ``go_to_definition`` / ``find_references``
                 for ~30 languages.
-    git         (Slice 5) status, diff, log, commit, blame.
+    git         Slice 5 ships read-only ``git_status`` / ``git_diff`` /
+                ``git_log`` / ``git_blame``. Write ops (add/commit/stash)
+                land later behind ``interrupt_on=``.
     tests       (Slice 6) Language-aware test runner.
     web         (Phase 3) web_search and web_fetch.
 
@@ -30,11 +32,16 @@ What's **not** here, and why:
 from __future__ import annotations
 
 from quoriv.tools.ast_tools import find_symbol
+from quoriv.tools.git import git_blame, git_diff, git_log, git_status
 
-QUORIV_TOOLS = [find_symbol]
+QUORIV_TOOLS = [find_symbol, git_status, git_diff, git_log, git_blame]
 """Default Quoriv-specific tools handed to ``create_deep_agent(tools=...)``."""
 
 __all__ = [
     "QUORIV_TOOLS",
     "find_symbol",
+    "git_blame",
+    "git_diff",
+    "git_log",
+    "git_status",
 ]
