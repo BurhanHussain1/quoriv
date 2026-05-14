@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-    { name = "Burhan Hussain", email = "hussainburhan207@gmail.com" },
+    { name = "Burhan Hussain", email = "BurhanHussain1@users.noreply.github.com" },
 ]
 keywords = [
     "ai",
