@@ -38,6 +38,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `fake_keyring` test fixture (in-memory keychain + env-var isolation)
 - Tests for keychain (12), base (14), factory (7), openai (5) — **74 tests total**, all passing
 
+#### Phase 0, Day 4 — CLI + chat loop (no DeepAgents yet)
+- `quoriv.__main__` — makes `python -m quoriv` work the same as the `quoriv` console script
+- `quoriv.cli` — Typer app with commands:
+  - `quoriv chat [--model] [--mode]` — start an interactive session
+  - `quoriv doctor` — health-check Rich table (Python, configured models, permission mode, API key status per provider)
+  - `quoriv version` — print the installed version
+  - `quoriv config show` — print the loaded merged configuration as JSON
+  - `quoriv config set <provider>` — prompt for API key (hidden input) and store in OS keychain
+  - `quoriv config list-providers` — table of known providers, env-var names, and whether a key is configured
+- `quoriv.app` — async chat loop using `rich.Console` + `prompt_toolkit.PromptSession`; streams responses via LangChain `model.astream(messages)`; slash commands `/help`, `/clear`, `/exit`, `/quit`; graceful Ctrl+C handling; helpful prompt when an API key is missing
+- Tests for the CLI commands using `typer.testing.CliRunner` (interactive `chat` deferred to Phase 1 integration tests)
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -53,9 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 0, Day 4+)
-- `cli.py` (Typer with `chat`, `config`, `doctor` commands) + `app.py` (Rich chat loop) streaming a direct OpenAI response (no DeepAgents yet — UI loop in isolation)
-- Day 5: Wire `create_deep_agent` with `LocalShellBackend` — full built-in tool suite (write_todos, ls, read_file, write_file, edit_file, glob, grep, execute, task) available immediately
+### Coming next (Phase 0, Day 5)
+- Wire `deepagents.create_deep_agent` with `LocalShellBackend(root_dir=cwd)` — the full built-in tool suite (`write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, `task`) comes online for free
+- Replace direct `model.astream(messages)` with `agent.astream_events(version="v2")` and route LangGraph events through the UI
 
 ---
 
