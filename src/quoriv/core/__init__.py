@@ -1,13 +1,25 @@
-"""Agent core: DeepAgents wiring, runtime loop, model routing, context.
+"""Agent core: wraps `deepagents.create_deep_agent` for Quoriv consumers.
 
-This package contains the parts of Quoriv that are independent of any
-specific client (CLI, VSCode extension, web UI). It can be imported and
-driven by any consumer.
+This package is the thin layer that sits between Quoriv's UI and the
+DeepAgents runtime. It is **not** the agent loop — DeepAgents owns that.
 
-Modules (implemented in Phase 1):
-    agent      DeepAgents wiring and tool injection.
-    runtime    The main agent loop and streaming event production.
-    routing    Per-task model routing (small vs strong model).
-    context    Context window management and compaction.
-    events     Event bus that consumers subscribe to.
+Modules (implemented in later phases):
+    agent       Build a configured DeepAgent for a session: wires the chosen
+                model, ``LocalShellBackend``, Quoriv-specific tools, permission
+                rules translated from the user's mode, memory file paths,
+                and a checkpointer.
+    routing     Per-task model routing implemented via ``SubAgent`` specs
+                (each subagent declares its own ``model=``), not via custom
+                middleware.
+    events      Subscriber for ``agent.astream_events(version="v2")`` that
+                feeds the UI's stream/diff/prompt renderers.
+
+What's **not** here, and why:
+
+    - No runtime/loop module: the compiled LangGraph graph returned by
+      ``create_deep_agent`` is the loop.
+    - No context-compaction module: ``SummarizationMiddleware`` is built into
+      every DeepAgents stack.
+    - No tool-invocation plumbing: ``FilesystemMiddleware`` + the plain
+      ``tools=`` list cover both built-in and Quoriv-added tools.
 """
