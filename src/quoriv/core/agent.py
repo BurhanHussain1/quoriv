@@ -1,8 +1,7 @@
 """Build a Quoriv-configured DeepAgent for a chat session.
 
 This is the seam between Quoriv (config, CLI, UI, Quoriv-specific tools)
-and DeepAgents (the agent runtime). Phase 1 Slice 1 adds permission-mode
-support on top of the Day 5 foundation:
+and DeepAgents (the agent runtime).
 
     * The user's chosen model (built by ``quoriv.models.get_model``).
     * ``LocalShellBackend`` rooted at the session's working directory —
@@ -12,14 +11,16 @@ support on top of the Day 5 foundation:
       Slice 7 swaps to ``SqliteSaver`` for session persistence.
     * ``interrupt_on=`` derived from the session's permission mode via
       :func:`quoriv.permissions.interrupt_on_for_mode`.
+    * :class:`quoriv.permissions.PathProtectionMiddleware` enforcing
+      :data:`quoriv.permissions.PATH_PROTECTION` (always-on denylist for
+      ``.env*`` / ``.git/`` / ``.ssh/`` / ``secrets/``).
 
-**Outstanding limitation — path protection enforcement.** DeepAgents
-0.6.1 rejects passing ``permissions=`` when the backend implements
-``SandboxBackendProtocol`` (which ``LocalShellBackend`` does). Until
-a future Slice adds a custom ``wrap_tool_call`` middleware that gates
-writes against ``PATH_PROTECTION``, path protection is provided
-indirectly through the approval-prompt UI (Slice 2) — users can always
-deny a write at the prompt.
+**Why a custom middleware for path protection?** DeepAgents 0.6.1
+rejects passing ``permissions=`` when the backend implements
+``SandboxBackendProtocol`` (which ``LocalShellBackend`` does). We need
+``LocalShellBackend`` so the agent can run shell commands, so we
+enforce path protection at the middleware layer instead. See
+:mod:`quoriv.permissions.guard` for the mechanics.
 """
 
 from __future__ import annotations
@@ -32,7 +33,12 @@ from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 
 from quoriv.models import get_model
-from quoriv.permissions import PermissionMode, interrupt_on_for_mode
+from quoriv.permissions import (
+    PATH_PROTECTION,
+    PathProtectionMiddleware,
+    PermissionMode,
+    interrupt_on_for_mode,
+)
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -84,6 +90,7 @@ def build_agent(
     return create_deep_agent(
         model=model,
         backend=backend,
+        middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))],
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,
     )

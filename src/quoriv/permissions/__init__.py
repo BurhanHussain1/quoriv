@@ -1,30 +1,32 @@
-"""Permission mode translation layer.
+"""Permission mode translation + path-protection guard.
 
 Quoriv exposes a 4-mode permission posture (``read-only`` / ``ask`` /
 ``auto`` / ``yolo``) to users. This package compiles those modes into
-DeepAgents' two underlying mechanisms:
+DeepAgents config and enforces always-on path protection.
 
-    permissions=[FilesystemPermission(...)]    enforced by FilesystemMiddleware
-    interrupt_on={"edit_file": True, ...}      enforced by HumanInTheLoopMiddleware
+Two layers:
 
-This is **not** a tool-call guard layer — DeepAgents enforces. Quoriv
-just emits the config.
+    permissions=[FilesystemPermission(...)]    (intent — see ``paths.py``)
+    interrupt_on={"edit_file": True, ...}      pause-for-approval
+    PathProtectionMiddleware                   hard tool-call denial
+
+DeepAgents 0.6.1 doesn't accept ``permissions=`` alongside sandbox
+backends, so we enforce path protection via the local
+:class:`PathProtectionMiddleware` instead. ``interrupt_on`` is still
+DeepAgents' own mechanism.
 
 Modules:
     modes       4-mode -> ``interrupt_on`` dict translator. Defines
                 ``WRITE_TOOLS`` and ``SHELL_TOOLS`` frozensets and the
-                ``PermissionMode`` Literal type. Phase 1 Slice 1: only
-                ``interrupt_on`` is wired; hard write blocking for
-                ``read-only`` is enforced at the approval UI layer.
+                ``PermissionMode`` Literal type.
     paths       ``PATH_PROTECTION`` — tuple of always-on deny rules for
-                ``.env*`` / ``.git/`` / ``.ssh/`` / ``secrets/``. Phase 1
-                Slice 1b will wire these via a custom ``wrap_tool_call``
-                middleware (DeepAgents 0.6.1 doesn't allow passing
-                ``permissions=`` alongside sandbox backends).
+                ``.env*`` / ``.git/`` / ``.ssh/`` / ``secrets/``.
+    guard       ``PathProtectionMiddleware`` — the actual enforcement
+                layer. Plugged into ``create_deep_agent(middleware=...)``
+                by :func:`quoriv.core.agent.build_agent`.
 
 What's **not** here, and why:
 
-    - No ``guard.py`` — DeepAgents' middleware enforces, not us.
     - No ``allowlist.py`` (yet) — Phase 2 UX layer for "always allow"
       promotion of one-off approvals to persistent ``interrupt_on``
       exceptions.
@@ -32,6 +34,7 @@ What's **not** here, and why:
 
 from __future__ import annotations
 
+from quoriv.permissions.guard import PathProtectionMiddleware
 from quoriv.permissions.modes import (
     SHELL_TOOLS,
     WRITE_TOOLS,
@@ -45,6 +48,7 @@ __all__ = [
     "PATH_PROTECTION",
     "SHELL_TOOLS",
     "WRITE_TOOLS",
+    "PathProtectionMiddleware",
     "PermissionMode",
     "interrupt_on_for_mode",
     "is_read_only",
