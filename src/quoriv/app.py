@@ -17,6 +17,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
@@ -25,6 +26,8 @@ from rich.panel import Panel
 from quoriv import __version__
 from quoriv.core import build_agent, render_token, render_tool_end, render_tool_start
 from quoriv.models import MissingAPIKeyError
+from quoriv.permissions import is_read_only
+from quoriv.ui import ApprovalDecision, prompt_approval
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,7 +35,8 @@ if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
 
     from quoriv.config import QuorivConfig
-    from quoriv.permissions import PermissionMode
+
+from quoriv.permissions import PermissionMode
 
 ALLOWED_MODES: tuple[PermissionMode, ...] = ("read-only", "ask", "auto", "yolo")
 
@@ -112,7 +116,7 @@ async def run_chat(
             continue
 
         try:
-            await _stream_agent(console, agent, user_input, thread_id)
+            await _drive_turn(console, agent, user_input, thread_id, permission_mode)
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
             continue
@@ -202,25 +206,48 @@ def _handle_slash(console: Console, raw: str, current_thread_id: str) -> _SlashR
 # ---------------------------------------------------------------------------
 
 
-async def _stream_agent(
+async def _drive_turn(
     console: Console,
     agent: Any,  # see core.agent.build_agent for the return-type rationale
     user_input: str,
     thread_id: str,
+    mode: PermissionMode,
 ) -> None:
-    """Drive the agent with the user's input and render the event stream.
+    """Drive one full user turn end-to-end, handling HITL interrupts.
 
-    The DeepAgent's ``MemorySaver`` checkpointer accumulates conversation
-    state under ``thread_id``; we only send the new user turn each call.
+    The loop:
+        1. Stream events from the agent until the graph pauses or finishes.
+        2. After the stream ends, ask the checkpointer whether the graph
+           is parked on a :class:`HumanInTheLoopMiddleware` interrupt.
+        3. If yes, render an approval prompt for each pending action and
+           resume the graph with the user's decisions.
+        4. Repeat until the agent has no more pending interrupts.
     """
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    console.print()  # blank line before output
+    next_input: Any = {"messages": [HumanMessage(content=user_input)]}
+    auto_deny = is_read_only(mode)
 
-    async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=user_input)]},
-        config=run_config,
-        version="v2",
-    ):
+    while True:
+        console.print()
+        await _stream_events(console, agent, next_input, run_config)
+        console.print()
+
+        hitl_request = await _pending_hitl_request(agent, run_config)
+        if hitl_request is None:
+            return
+
+        decisions = await _collect_decisions(console, hitl_request, auto_deny=auto_deny)
+        next_input = Command(resume={"decisions": decisions})
+
+
+async def _stream_events(
+    console: Console,
+    agent: Any,
+    input_payload: Any,
+    run_config: RunnableConfig,
+) -> None:
+    """Pump the agent's event stream into the UI."""
+    async for event in agent.astream_events(input_payload, config=run_config, version="v2"):
         kind = event.get("event")
         data = event.get("data", {})
 
@@ -242,7 +269,47 @@ async def _stream_agent(
             render_tool_end(console, data.get("output"))
             continue
 
-    console.print()  # final newline after the stream completes
+
+async def _pending_hitl_request(
+    agent: Any,
+    run_config: RunnableConfig,
+) -> dict[str, Any] | None:
+    """Return the first pending ``HITLRequest`` payload, or ``None``."""
+    state = await agent.aget_state(run_config)
+    for task in getattr(state, "tasks", ()):
+        for interrupt in getattr(task, "interrupts", ()):
+            payload = getattr(interrupt, "value", None)
+            if isinstance(payload, dict) and "action_requests" in payload:
+                return payload
+    return None
+
+
+async def _collect_decisions(
+    console: Console,
+    hitl_request: dict[str, Any],
+    *,
+    auto_deny: bool,
+) -> list[dict[str, Any]]:
+    """Prompt the user for each ``ActionRequest`` and serialize the decisions."""
+    decisions: list[dict[str, Any]] = []
+    for action in hitl_request.get("action_requests", []):
+        decision = await prompt_approval(
+            console,
+            tool_name=action.get("name", "?"),
+            tool_args=action.get("args", {}),
+            description=action.get("description"),
+            auto_deny=auto_deny,
+        )
+        decisions.append(_decision_payload(decision))
+    return decisions
+
+
+def _decision_payload(decision: ApprovalDecision) -> dict[str, Any]:
+    """Convert an :class:`ApprovalDecision` to the HITL resume schema."""
+    payload: dict[str, Any] = {"type": decision.type}
+    if decision.message is not None:
+        payload["message"] = decision.message
+    return payload
 
 
 # ---------------------------------------------------------------------------
