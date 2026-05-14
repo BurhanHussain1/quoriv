@@ -7,9 +7,6 @@ Top-level commands:
     quoriv config show         Print the loaded configuration as JSON.
     quoriv config set X        Store an API key for provider X in the OS keychain.
     quoriv config list-providers   List known providers and which keys are set.
-
-For Phase 0 Day 4, ``chat`` streams responses directly from the configured
-LLM (no DeepAgents integration yet — that lands in Day 5).
 """
 
 from __future__ import annotations
@@ -17,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path  # noqa: TC003  # Typer reads annotations at runtime via get_type_hints
 from typing import Annotated
 
 import typer
@@ -81,14 +79,25 @@ def chat(
             help="Permission mode for this session: read-only | ask | auto | yolo.",
         ),
     ] = "ask",
+    cwd: Annotated[
+        Path | None,
+        typer.Option(
+            "--cwd",
+            help="Repository root the agent operates in. Defaults to the current directory.",
+            file_okay=False,
+            dir_okay=True,
+            exists=True,
+            resolve_path=True,
+        ),
+    ] = None,
 ) -> None:
     """Start an interactive chat session."""
     # Import here so ``quoriv --help`` doesn't pay the prompt_toolkit / Rich
-    # / langchain-openai import cost.
+    # / langchain-openai / deepagents import cost.
     from quoriv.app import run_chat  # noqa: PLC0415  (intentional lazy import)
 
     cfg = load_config()
-    asyncio.run(run_chat(cfg, model_override=model, mode=mode))
+    asyncio.run(run_chat(cfg, model_override=model, mode=mode, cwd=cwd))
 
 
 @app.command()

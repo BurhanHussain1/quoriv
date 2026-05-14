@@ -1,38 +1,42 @@
-"""Interactive chat loop — Phase 0 Day 4.
+"""Interactive chat loop driving a DeepAgent.
 
-Streams responses directly from the configured LLM. **No DeepAgents
-integration yet** — Day 5 adds it. This slice exists to prove the UI loop
-works in isolation before we plug the agent in.
-
-Architecture:
-    * Rich `Console` for output rendering.
-    * `prompt_toolkit.PromptSession` for input (multi-line support, history).
-    * LangChain `BaseChatModel.astream(messages)` for token streaming.
+Day 5 wiring:
+    * Build a session-scoped :class:`CompiledStateGraph` via
+      :func:`quoriv.core.agent.build_agent`. That agent has the full
+      DeepAgents built-in toolset (write_todos, ls, read_file, write_file,
+      edit_file, glob, grep, execute, task) plus always-on path protection.
+    * Drive the agent via ``agent.astream_events(version="v2")`` and route
+      events through :mod:`quoriv.core.events` for rendering.
+    * An in-memory checkpointer keyed by a per-session ``thread_id`` is the
+      conversation state — no manual message-history bookkeeping needed.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import uuid
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
 from rich.panel import Panel
 
 from quoriv import __version__
-from quoriv.models import MissingAPIKeyError, get_model
+from quoriv.core import build_agent, render_token, render_tool_end, render_tool_start
+from quoriv.models import MissingAPIKeyError
 
 if TYPE_CHECKING:
-    from langchain_core.language_models import BaseChatModel
-    from langchain_core.messages import BaseMessage
+    from pathlib import Path
+
+    from langchain_core.runnables import RunnableConfig
 
     from quoriv.config import QuorivConfig
 
 
 SLASH_COMMANDS: dict[str, str] = {
     "/help": "List available slash commands",
-    "/clear": "Clear the conversation",
+    "/clear": "Start a fresh conversation (new thread)",
     "/exit": "Exit the chat session",
     "/quit": "Exit the chat session (alias)",
 }
@@ -43,33 +47,37 @@ async def run_chat(
     *,
     model_override: str | None = None,
     mode: str = "ask",
+    cwd: Path | None = None,
 ) -> None:
     """Run the interactive chat loop until the user exits.
 
     Args:
         config: Loaded Quoriv configuration.
-        model_override: Optional ``provider:name`` string overriding
+        model_override: Optional ``provider:name`` overriding
             ``config.model.default`` for this session.
-        mode: Permission mode label (only displayed in the welcome banner
-            for Day 4; Phase 1 wires this into DeepAgents ``permissions=``
-            and ``interrupt_on=`` config).
+        mode: Permission-mode label. **Day 5 just displays it**; Phase 1
+            wires the four modes (``read-only`` / ``ask`` / ``auto`` /
+            ``yolo``) into the agent's ``permissions=`` and
+            ``interrupt_on=`` config.
+        cwd: Repository root for the agent's filesystem and shell.
+            Defaults to ``Path.cwd()`` (resolved inside ``build_agent``).
     """
     console = Console()
     model_id = model_override or config.model.default
 
     try:
-        model = get_model(model_id)
+        agent = build_agent(config, model_override=model_override, cwd=cwd)
     except MissingAPIKeyError as exc:
         _render_missing_key(console, exc)
         return
     except Exception as exc:  # pragma: no cover  # surfaces upstream errors
-        console.print(f"[red]Failed to load model {model_id!r}:[/red] {exc}")
+        console.print(f"[red]Failed to build agent for {model_id!r}:[/red] {exc}")
         return
 
-    _render_welcome(console, model_id, mode)
+    _render_welcome(console, model_id=model_id, mode=mode, cwd=cwd)
 
-    history: list[BaseMessage] = []
     session: PromptSession[str] = PromptSession()
+    thread_id = _new_thread_id()
 
     while True:
         try:
@@ -83,23 +91,21 @@ async def run_chat(
             continue
 
         if user_input.startswith("/"):
-            if _handle_slash(console, user_input, history):
-                continue
-            return  # /exit or /quit
+            command_result = _handle_slash(console, user_input, thread_id)
+            if command_result.exit:
+                return
+            if command_result.new_thread_id is not None:
+                thread_id = command_result.new_thread_id
+            continue
 
-        history.append(HumanMessage(content=user_input))
         try:
-            assistant_text = await _stream_response(console, model, history)
+            await _stream_agent(console, agent, user_input, thread_id)
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
-            history.pop()  # drop the unanswered prompt
             continue
-        except Exception as exc:  # surface model/network errors gracefully
-            console.print(f"\n[red]Error from model:[/red] {exc}")
-            history.pop()
+        except Exception as exc:  # surface agent/network errors gracefully
+            console.print(f"\n[red]Error:[/red] {exc}")
             continue
-
-        history.append(AIMessage(content=assistant_text))
 
 
 # ---------------------------------------------------------------------------
@@ -107,13 +113,21 @@ async def run_chat(
 # ---------------------------------------------------------------------------
 
 
-def _render_welcome(console: Console, model_id: str, mode: str) -> None:
+def _render_welcome(
+    console: Console,
+    *,
+    model_id: str,
+    mode: str,
+    cwd: Path | None,
+) -> None:
+    cwd_display = str(cwd) if cwd is not None else "(current directory)"
     console.print(
         Panel.fit(
             (
                 f"[bold]Quoriv[/bold] v{__version__}\n"
                 f"Model: [cyan]{model_id}[/cyan]\n"
                 f"Mode:  [cyan]{mode}[/cyan]\n"
+                f"Root:  [cyan]{cwd_display}[/cyan]\n"
                 f"Type [yellow]/help[/yellow] for commands, [yellow]/exit[/yellow] to quit."
             ),
             title="welcome",
@@ -129,72 +143,116 @@ def _render_missing_key(console: Console, exc: MissingAPIKeyError) -> None:
     console.print(f"  • Or set: [cyan]${exc.env_var}=<your-key>[/cyan] in the environment\n")
 
 
-def _handle_slash(
-    console: Console,
-    raw: str,
-    history: list[BaseMessage],
-) -> bool:
-    """Dispatch a slash command.
+# ---------------------------------------------------------------------------
+# Slash commands
+# ---------------------------------------------------------------------------
 
-    Returns:
-        ``True`` if the loop should continue, ``False`` if the user asked
-        to exit.
-    """
+
+class _SlashResult:
+    """Outcome of dispatching a slash command."""
+
+    __slots__ = ("exit", "new_thread_id")
+
+    def __init__(self, *, exit: bool = False, new_thread_id: str | None = None) -> None:
+        self.exit = exit
+        self.new_thread_id = new_thread_id
+
+
+def _handle_slash(console: Console, raw: str, current_thread_id: str) -> _SlashResult:
+    """Dispatch a slash command and return what the caller should do next."""
     cmd = raw.split(maxsplit=1)[0].lower()
 
     if cmd in ("/exit", "/quit"):
         console.print("[dim]Goodbye.[/dim]")
-        return False
+        return _SlashResult(exit=True)
 
     if cmd == "/clear":
-        history.clear()
+        new_id = _new_thread_id()
         console.clear()
-        console.print("[dim]Conversation cleared.[/dim]")
-        return True
+        console.print("[dim]Started a fresh conversation.[/dim]")
+        return _SlashResult(new_thread_id=new_id)
 
     if cmd == "/help":
         console.print()
         for c, desc in SLASH_COMMANDS.items():
             console.print(f"  [cyan]{c:<8}[/cyan]  {desc}")
         console.print()
-        return True
+        return _SlashResult()
 
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
-    return True
+    _ = current_thread_id  # placeholder for future thread-aware commands
+    return _SlashResult()
 
 
-async def _stream_response(
+# ---------------------------------------------------------------------------
+# Agent driver
+# ---------------------------------------------------------------------------
+
+
+async def _stream_agent(
     console: Console,
-    model: BaseChatModel,
-    history: list[BaseMessage],
-) -> str:
-    """Stream a response from ``model`` and accumulate the assistant text.
+    agent: Any,  # see core.agent.build_agent for the return-type rationale
+    user_input: str,
+    thread_id: str,
+) -> None:
+    """Drive the agent with the user's input and render the event stream.
 
-    For Day 4 the streaming renderer prints plain text without re-parsing
-    as markdown. Phase 1 replaces this with a proper streaming markdown
-    renderer (Rich ``Live`` widget) and syntax-highlighted code blocks.
+    The DeepAgent's ``MemorySaver`` checkpointer accumulates conversation
+    state under ``thread_id``; we only send the new user turn each call.
     """
-    parts: list[str] = []
-    console.print()
+    run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    console.print()  # blank line before output
 
-    async for chunk in model.astream(history):
-        text = _chunk_text(chunk.content)
-        if text:
-            console.out(text, end="", highlight=False)
-            parts.append(text)
+    async for event in agent.astream_events(
+        {"messages": [HumanMessage(content=user_input)]},
+        config=run_config,
+        version="v2",
+    ):
+        kind = event.get("event")
+        data = event.get("data", {})
 
-    console.print()  # newline after streaming completes
-    return "".join(parts)
+        if kind == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            if chunk is None:
+                continue
+            text = _chunk_text(getattr(chunk, "content", ""))
+            render_token(console, text)
+            continue
+
+        if kind == "on_tool_start":
+            name = event.get("name", "?")
+            tool_args = data.get("input", {})
+            render_tool_start(console, name, tool_args)
+            continue
+
+        if kind == "on_tool_end":
+            render_tool_end(console, data.get("output"))
+            continue
+
+    console.print()  # final newline after the stream completes
 
 
-def _chunk_text(content: str | list[str | dict[str, object]]) -> str:
-    """Extract plain text from a LangChain message chunk's content.
+# ---------------------------------------------------------------------------
+# Internals
+# ---------------------------------------------------------------------------
 
-    Most chunks have a string content; some (multimodal, tool-use) carry
-    a list of content blocks. We surface only the text blocks here.
+
+def _new_thread_id() -> str:
+    """Return a fresh checkpointer thread identifier for a session."""
+    return uuid.uuid4().hex
+
+
+def _chunk_text(content: Any) -> str:  # LangChain content is dynamic
+    """Extract plain text from a LangChain message chunk's ``content`` field.
+
+    Most chunks carry a string. Multimodal / tool-use chunks may instead
+    carry a list of content blocks — we surface text blocks and ignore the
+    rest at this layer.
     """
     if isinstance(content, str):
         return content
+    if not isinstance(content, list):
+        return ""
     parts: list[str] = []
     for block in content:
         if isinstance(block, str):

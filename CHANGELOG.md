@@ -50,6 +50,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `quoriv.app` — async chat loop using `rich.Console` + `prompt_toolkit.PromptSession`; streams responses via LangChain `model.astream(messages)`; slash commands `/help`, `/clear`, `/exit`, `/quit`; graceful Ctrl+C handling; helpful prompt when an API key is missing
 - Tests for the CLI commands using `typer.testing.CliRunner` (interactive `chat` deferred to Phase 1 integration tests)
 
+#### Phase 0, Day 5 — DeepAgents wired
+- `quoriv.core.agent.build_agent` — constructs a session-scoped `CompiledStateGraph` via `deepagents.create_deep_agent`, with `LocalShellBackend(root_dir=cwd)` for real file ops + shell, an in-memory `MemorySaver` checkpointer for multi-turn state, and always-on `PATH_PROTECTION` rules denying writes to `.env*`, `.git/**`, `.ssh/**`, and `secrets/**`
+- `quoriv.core.PATH_PROTECTION` — tuple of `FilesystemPermission` deny rules that no permission mode can disable (security invariant)
+- `quoriv.core.events` — Rich-rendering helpers for LangGraph events: `render_token`, `render_tool_start`, `render_tool_end`, `_format_args`
+- `quoriv.app` rewritten to drive the DeepAgent:
+  - Replaced direct `model.astream(messages)` with `agent.astream_events({"messages": [HumanMessage]}, version="v2")`
+  - Per-session `thread_id` keys the checkpointer — `/clear` rotates to a new thread for a fresh conversation
+  - Event-kind dispatch for `on_chat_model_stream`, `on_tool_start`, `on_tool_end`
+- `quoriv chat` gains a `--cwd` option to target a specific repo root
+- New tests:
+  - `tests/unit/core/test_agent.py` — `PATH_PROTECTION` shape (5 rules covering env/git/ssh/secrets), `build_agent` raises `MissingAPIKeyError` without keys, returns a graph exposing `astream_events`/`ainvoke`/`invoke` when keys are present, honors `model_override`
+  - `tests/unit/core/test_events.py` — `render_token`, `render_tool_start`, `render_tool_end` (short/long/None/multiline cases), `_format_args` (key=value, truncation per-value and per-call, non-dict fallback, empty dict)
+
+With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset available out of the gate: `write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, and `task` (for sub-agent delegation).
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -65,9 +80,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 0, Day 5)
-- Wire `deepagents.create_deep_agent` with `LocalShellBackend(root_dir=cwd)` — the full built-in tool suite (`write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, `task`) comes online for free
-- Replace direct `model.astream(messages)` with `agent.astream_events(version="v2")` and route LangGraph events through the UI
+### Coming next (Phase 1)
+- Translate Quoriv's 4 permission modes (`read-only` / `ask` / `auto` / `yolo`) into DeepAgents `permissions=` and `interrupt_on=` config
+- Replace plain-text streaming with a markdown-aware Rich `Live` renderer; add a diff renderer for `edit_file` calls
+- Approval prompt UI for `interrupt_on` pauses (arrow-key choice)
+- Quoriv-specific tools added as plain callables: tree-sitter `find_symbol` / `go_to_definition` / `find_references`, language-aware `run_tests`, git operations
+- Swap the in-memory `MemorySaver` for `SqliteSaver` so sessions survive across restarts
+- `/cost`, `/save`, `/load`, `/resume`, `/tools`, `/memory` slash commands
 
 ---
 
