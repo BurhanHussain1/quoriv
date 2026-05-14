@@ -5,15 +5,18 @@ DeepAgents runtime. It is **not** the agent loop — DeepAgents owns that.
 
 Modules:
     agent       Build a configured DeepAgent for a session: wires the chosen
-                model, ``LocalShellBackend``, always-on path protection, and
-                an in-memory checkpointer. Phase 1 extends this with
-                Quoriv-specific tools, mode-based permission/interrupt config,
-                memory file paths, and a SqliteSaver checkpointer.
+                model, ``LocalShellBackend``, permission mode → ``interrupt_on``,
+                and a checkpointer. Later Phase 1 slices extend with
+                Quoriv-specific tools, ``SqliteSaver`` checkpointing, and
+                memory file loading.
     events      Rich-rendering helpers for ``agent.astream_events(version="v2")``
                 output: render_token, render_tool_start, render_tool_end.
     routing     (Phase 2) Per-task model routing implemented via ``SubAgent``
                 specs (each subagent declares its own ``model=``), not via
                 custom middleware.
+
+Note: ``PATH_PROTECTION`` lives in :mod:`quoriv.permissions.paths` — the
+canonical location for permission/path policy.
 
 What's **not** here, and why:
 
@@ -27,11 +30,10 @@ What's **not** here, and why:
 
 from __future__ import annotations
 
-from quoriv.core.agent import PATH_PROTECTION, build_agent
+from quoriv.core.agent import build_agent
 from quoriv.core.events import render_token, render_tool_end, render_tool_start
 
 __all__ = [
-    "PATH_PROTECTION",
     "build_agent",
     "render_token",
     "render_tool_end",

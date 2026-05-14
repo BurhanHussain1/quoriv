@@ -1,31 +1,25 @@
 """Build a Quoriv-configured DeepAgent for a chat session.
 
 This is the seam between Quoriv (config, CLI, UI, Quoriv-specific tools)
-and DeepAgents (the agent runtime). Day 5 wires the minimum needed for an
-end-to-end loop:
+and DeepAgents (the agent runtime). Phase 1 Slice 1 adds permission-mode
+support on top of the Day 5 foundation:
 
     * The user's chosen model (built by ``quoriv.models.get_model``).
     * ``LocalShellBackend`` rooted at the session's working directory —
       gives the agent real file ops + a real shell. ``virtual_mode=True``
       keeps tool-visible paths sandboxed to POSIX paths under ``root_dir``.
-    * An in-memory checkpointer so conversation state survives across
-      turns within a session.
+    * An in-memory checkpointer (required for ``interrupt_on``) — Phase 1
+      Slice 7 swaps to ``SqliteSaver`` for session persistence.
+    * ``interrupt_on=`` derived from the session's permission mode via
+      :func:`quoriv.permissions.interrupt_on_for_mode`.
 
-**Day 5 limitation — path protection deferred to Phase 1.** DeepAgents
+**Outstanding limitation — path protection enforcement.** DeepAgents
 0.6.1 rejects passing ``permissions=`` when the backend implements
-``SandboxBackendProtocol`` (which ``LocalShellBackend`` does), because
-tool-level permissions for the ``execute`` tool are not yet implemented
-upstream. Since Day 5 must have ``execute`` available for end-to-end
-demos, we leave ``permissions=`` unset for now. The ``PATH_PROTECTION``
-constant remains defined here as the policy we want — Phase 1 will
-enforce it via a different mechanism (custom guard middleware, or
-``interrupt_on`` for write/edit tools mapped from the permission mode).
-
-Phase 1 will also translate Quoriv's permission modes into DeepAgents'
-``interrupt_on=`` config, add Quoriv-specific tools (AST, git, tests,
-web, MCP), load memory files from ``PROJECT.md`` / ``~/.quoriv/memory.md``,
-and swap the in-memory checkpointer for a ``SqliteSaver`` so sessions
-persist across restarts.
+``SandboxBackendProtocol`` (which ``LocalShellBackend`` does). Until
+a future Slice adds a custom ``wrap_tool_call`` middleware that gates
+writes against ``PATH_PROTECTION``, path protection is provided
+indirectly through the approval-prompt UI (Slice 2) — users can always
+deny a write at the prompt.
 """
 
 from __future__ import annotations
@@ -33,11 +27,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 
 from quoriv.models import get_model
+from quoriv.permissions import PermissionMode, interrupt_on_for_mode
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -45,32 +40,12 @@ if TYPE_CHECKING:
     from quoriv.config import QuorivConfig
 
 
-PATH_PROTECTION: tuple[FilesystemPermission, ...] = (
-    FilesystemPermission(operations=["write"], paths=["/.env"], mode="deny"),
-    FilesystemPermission(operations=["write"], paths=["/.env.*"], mode="deny"),
-    FilesystemPermission(operations=["write"], paths=["/.git/**"], mode="deny"),
-    FilesystemPermission(operations=["read", "write"], paths=["/.ssh/**"], mode="deny"),
-    FilesystemPermission(operations=["read", "write"], paths=["/secrets/**"], mode="deny"),
-)
-"""Always-on path protection rules.
-
-Defined here as the policy intent for Phase 1. **Not currently passed to
-DeepAgents** (see module docstring for the upstream incompatibility with
-sandbox backends in 0.6.1). Phase 1 will wire them in via a different
-enforcement layer.
-
-The intent: deny writes to ``.env``/``.env.*``, anything under ``.git/``,
-and both reads and writes under ``.ssh/`` and ``secrets/``. Paths are
-POSIX-style relative to the backend's ``root_dir`` (the session's
-working directory).
-"""
-
-
 def build_agent(
     config: QuorivConfig,
     *,
     model_override: str | None = None,
     cwd: Path | None = None,
+    mode: PermissionMode = "ask",
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> Any:  # create_deep_agent's deeply generic return type isn't worth pinning
     """Construct a configured DeepAgent for a chat session.
@@ -81,9 +56,12 @@ def build_agent(
             ``config.model.default`` for this session.
         cwd: Working directory the agent's filesystem and shell are rooted
             in. Defaults to ``Path.cwd()``.
+        mode: Permission mode for the session. Compiled to DeepAgents'
+            ``interrupt_on=`` dict via
+            :func:`quoriv.permissions.interrupt_on_for_mode`.
         checkpointer: Optional LangGraph checkpointer. Defaults to a fresh
-            in-memory ``MemorySaver`` so multi-turn state persists within
-            the session.
+            in-memory ``MemorySaver``. Required for ``interrupt_on`` to
+            work, so we always supply at least one.
 
     Returns:
         The compiled DeepAgent graph. Drive it with
@@ -101,9 +79,11 @@ def build_agent(
     root = cwd if cwd is not None else Path.cwd()
 
     backend = LocalShellBackend(root_dir=str(root), virtual_mode=True)
+    interrupt_on = interrupt_on_for_mode(mode)
 
     return create_deep_agent(
         model=model,
         backend=backend,
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
+        interrupt_on=interrupt_on or None,
     )

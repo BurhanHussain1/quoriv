@@ -65,6 +65,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset available out of the gate: `write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, and `task` (for sub-agent delegation).
 
+#### Phase 1 Slice 1 — Permission modes wired
+- `quoriv.permissions.modes` — new module exporting `PermissionMode` (`Literal["read-only", "ask", "auto", "yolo"]`), `WRITE_TOOLS` (`{"write_file", "edit_file"}`), `SHELL_TOOLS` (`{"execute"}`), `interrupt_on_for_mode(mode)`, and `is_read_only(mode)`
+- `quoriv.permissions.paths` — canonical home for `PATH_PROTECTION` (moved out of `core/agent.py`, where it was a transient placeholder)
+- `quoriv.permissions.__init__` — re-exports the public surface from both submodules
+- `quoriv.core.agent.build_agent` now accepts a `mode: PermissionMode = "ask"` parameter and applies the compiled `interrupt_on=` dict via `interrupt_on_for_mode(mode)`. Modes compile as:
+  - `yolo` → `{}` (no prompts)
+  - `auto` → `{"execute": True}` (prompt only before shell)
+  - `ask`, `read-only` → `{"write_file": True, "edit_file": True, "execute": True}` (prompt before every write or shell call). Hard write denial in `read-only` is enforced at the approval-prompt UI (Slice 2).
+- `quoriv.app.run_chat` validates the mode string against `ALLOWED_MODES` and passes it through to `build_agent`
+- 24 new tests:
+  - `tests/unit/permissions/test_modes.py` — 16 tests covering all 4 modes, tool-set membership and disjointness, dict freshness, `is_read_only`
+  - `tests/unit/permissions/test_paths.py` — 8 tests covering rule shape, env/git/ssh/secrets coverage, POSIX rooting, immutability
+- `tests/unit/core/test_agent.py` updated: `TestPathProtection` removed (moved with the data to `test_paths.py`), `TestBuildAgentModes` added (parametrized build for all 4 modes)
+
+### Changed
+- `PATH_PROTECTION` is no longer re-exported from `quoriv.core` — import it from `quoriv.permissions` instead.
+
+**Test count: 108 → 130** (+22). All ruff / ruff format / mypy strict / pytest gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -80,13 +99,16 @@ With Day 5 wired, `quoriv chat` now has the full DeepAgents built-in toolset ava
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 1)
-- Translate Quoriv's 4 permission modes (`read-only` / `ask` / `auto` / `yolo`) into DeepAgents `permissions=` and `interrupt_on=` config
-- Replace plain-text streaming with a markdown-aware Rich `Live` renderer; add a diff renderer for `edit_file` calls
-- Approval prompt UI for `interrupt_on` pauses (arrow-key choice)
-- Quoriv-specific tools added as plain callables: tree-sitter `find_symbol` / `go_to_definition` / `find_references`, language-aware `run_tests`, git operations
-- Swap the in-memory `MemorySaver` for `SqliteSaver` so sessions survive across restarts
-- `/cost`, `/save`, `/load`, `/resume`, `/tools`, `/memory` slash commands
+### Coming next (Phase 1 — remaining slices)
+- **Slice 2:** Approval prompt UI for `interrupt_on` pauses (arrow-key choice; auto-deny in `read-only`)
+- **Slice 1b:** Custom `wrap_tool_call` middleware that enforces `PATH_PROTECTION` against the live agent (DeepAgents 0.6.1 doesn't allow `permissions=` alongside sandbox backends, so we need a custom guard layer)
+- **Slice 3:** Replace plain-text streaming with a markdown-aware Rich `Live` renderer; add a diff renderer for `edit_file` calls
+- **Slice 4:** Quoriv-specific tools as plain callables — tree-sitter `find_symbol` / `go_to_definition` / `find_references`
+- **Slice 5:** Git tools — `git_status`, `git_diff`, `git_log`, `git_blame`
+- **Slice 6:** Language-aware `run_tests` tool
+- **Slice 7:** Swap in-memory `MemorySaver` for `SqliteSaver` so sessions survive across restarts
+- **Slice 8:** `/cost`, `/save`, `/load`, `/resume`, `/tools`, `/memory`, `/mode` slash commands + persistent status line
+- **Slice 9:** Local JSON trace log + integration tests
 
 ---
 

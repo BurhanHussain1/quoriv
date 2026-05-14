@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
 
     from quoriv.config import QuorivConfig
+    from quoriv.permissions import PermissionMode
+
+ALLOWED_MODES: tuple[PermissionMode, ...] = ("read-only", "ask", "auto", "yolo")
 
 
 SLASH_COMMANDS: dict[str, str] = {
@@ -55,18 +58,28 @@ async def run_chat(
         config: Loaded Quoriv configuration.
         model_override: Optional ``provider:name`` overriding
             ``config.model.default`` for this session.
-        mode: Permission-mode label. **Day 5 just displays it**; Phase 1
-            wires the four modes (``read-only`` / ``ask`` / ``auto`` /
-            ``yolo``) into the agent's ``permissions=`` and
-            ``interrupt_on=`` config.
+        mode: Permission mode for this session — one of ``read-only`` /
+            ``ask`` / ``auto`` / ``yolo``. Compiled to DeepAgents'
+            ``interrupt_on=`` config by
+            :func:`quoriv.permissions.interrupt_on_for_mode`.
         cwd: Repository root for the agent's filesystem and shell.
             Defaults to ``Path.cwd()`` (resolved inside ``build_agent``).
     """
     console = Console()
     model_id = model_override or config.model.default
 
+    if mode not in ALLOWED_MODES:
+        console.print(f"[red]Unknown mode {mode!r}.[/red]  Valid: {', '.join(ALLOWED_MODES)}")
+        return
+    permission_mode: PermissionMode = mode
+
     try:
-        agent = build_agent(config, model_override=model_override, cwd=cwd)
+        agent = build_agent(
+            config,
+            model_override=model_override,
+            cwd=cwd,
+            mode=permission_mode,
+        )
     except MissingAPIKeyError as exc:
         _render_missing_key(console, exc)
         return

@@ -1,53 +1,20 @@
-"""Tests for `quoriv.core.agent`."""
+"""Tests for `quoriv.core.agent`.
+
+Path-protection rule shape lives in
+:mod:`tests.unit.permissions.test_paths` — those constants are now
+canonically defined in :mod:`quoriv.permissions.paths`.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from deepagents import FilesystemPermission
 
 from quoriv.config import load_config
-from quoriv.core.agent import PATH_PROTECTION, build_agent
+from quoriv.core.agent import build_agent
 from quoriv.models import MissingAPIKeyError
-
-# ---------------------------------------------------------------------------
-# PATH_PROTECTION rules
-# ---------------------------------------------------------------------------
-
-
-class TestPathProtection:
-    def test_all_entries_are_filesystem_permissions(self) -> None:
-        assert all(isinstance(rule, FilesystemPermission) for rule in PATH_PROTECTION)
-
-    def test_all_entries_are_deny(self) -> None:
-        assert all(rule.mode == "deny" for rule in PATH_PROTECTION)
-
-    def test_protects_env_files(self) -> None:
-        paths = {p for rule in PATH_PROTECTION for p in rule.paths}
-        assert "/.env" in paths
-        assert "/.env.*" in paths
-
-    def test_protects_git_directory(self) -> None:
-        paths = {p for rule in PATH_PROTECTION for p in rule.paths}
-        assert "/.git/**" in paths
-
-    def test_protects_ssh_for_read_and_write(self) -> None:
-        ssh_rules = [r for r in PATH_PROTECTION if "/.ssh/**" in r.paths]
-        assert ssh_rules, "expected at least one rule covering /.ssh/**"
-        ops = {op for rule in ssh_rules for op in rule.operations}
-        assert {"read", "write"}.issubset(ops)
-
-    def test_protects_secrets_for_read_and_write(self) -> None:
-        secrets_rules = [r for r in PATH_PROTECTION if "/secrets/**" in r.paths]
-        assert secrets_rules, "expected at least one rule covering /secrets/**"
-        ops = {op for rule in secrets_rules for op in rule.operations}
-        assert {"read", "write"}.issubset(ops)
-
-
-# ---------------------------------------------------------------------------
-# build_agent
-# ---------------------------------------------------------------------------
+from quoriv.permissions import PermissionMode
 
 
 class TestBuildAgent:
@@ -85,10 +52,27 @@ class TestBuildAgent:
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         cfg = load_config()
-        # Override with a different OpenAI model — should still build.
         agent = build_agent(
             cfg,
             model_override="openai:gpt-4o-mini",
             cwd=tmp_path,
         )
+        assert hasattr(agent, "astream_events")
+
+
+class TestBuildAgentModes:
+    """Each permission mode should build a valid agent."""
+
+    @pytest.mark.parametrize("mode", ["read-only", "ask", "auto", "yolo"])
+    def test_each_mode_builds_cleanly(
+        self,
+        mode: PermissionMode,
+        fake_home: Path,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        cfg = load_config()
+        agent = build_agent(cfg, cwd=tmp_path, mode=mode)
         assert hasattr(agent, "astream_events")
