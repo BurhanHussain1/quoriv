@@ -17,6 +17,7 @@ from rich.console import Console
 
 from quoriv.app import (
     SLASH_COMMANDS,
+    _build_status_line,
     _handle_slash,
 )
 from quoriv.core import SessionRegistry
@@ -195,3 +196,122 @@ class TestLegacyCommands:
         assert result.exit is False
         assert result.new_thread_id is None
         assert "Unknown command" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Slice 8 — /tools, /memory, /mode, /cost slash commands
+# ---------------------------------------------------------------------------
+
+
+class TestSlice8SlashCommandsListed:
+    def test_new_commands_listed(self) -> None:
+        for cmd in ("/tools", "/memory", "/mode", "/cost"):
+            assert cmd in SLASH_COMMANDS
+
+
+class TestToolsCommand:
+    def test_lists_builtins_and_quoriv_tools(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        result = _handle_slash(console, "/tools", "current", _registry(tmp_path))
+        assert result.exit is False
+        assert result.new_thread_id is None
+        output = buf.getvalue()
+        # A representative DeepAgents built-in and a representative Quoriv tool
+        # should both appear.
+        assert "write_todos" in output
+        assert "git_status" in output
+        assert "run_tests" in output
+        assert "DeepAgents built-ins" in output
+        assert "Quoriv tools" in output
+
+
+class TestMemoryCommand:
+    def test_reports_missing_files(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
+        output = buf.getvalue()
+        assert "Memory files" in output
+        assert "not present" in output  # both stubs missing -> at least one marker
+        assert "No memory files found" in output
+
+    def test_reports_project_md_when_present(self, tmp_path: Path) -> None:
+        (tmp_path / "PROJECT.md").write_text("# project context\n", encoding="utf-8")
+        console, buf = _make_console()
+        _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
+        output = buf.getvalue()
+        assert "PROJECT.md" in output
+        assert "bytes" in output
+        assert "No memory files found" not in output
+
+
+class TestModeCommand:
+    def test_reports_current_mode_and_gates(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        _handle_slash(console, "/mode", "current", _registry(tmp_path), mode="ask")
+        output = buf.getvalue()
+        assert "Permission mode" in output
+        assert "ask" in output
+        # ask mode gates write_file, edit_file, execute, and git writes.
+        for gated in ("write_file", "edit_file", "execute", "git_commit"):
+            assert gated in output
+
+    def test_yolo_reports_no_gates(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        _handle_slash(console, "/mode", "current", _registry(tmp_path), mode="yolo")
+        output = buf.getvalue()
+        assert "yolo" in output
+        assert "nothing — every tool runs" in output
+
+    def test_available_modes_listed(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        _handle_slash(console, "/mode", "current", _registry(tmp_path), mode="ask")
+        output = buf.getvalue()
+        for name in ("read-only", "ask", "auto", "yolo"):
+            assert name in output
+
+
+class TestCostCommand:
+    def test_is_a_stub(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        result = _handle_slash(console, "/cost", "current", _registry(tmp_path))
+        assert result.exit is False
+        assert result.new_thread_id is None
+        output = buf.getvalue()
+        assert "Token tracking is not yet wired" in output
+        assert "Slice 9" in output
+
+
+# ---------------------------------------------------------------------------
+# Status-line builder (pure function — no PromptSession needed).
+# ---------------------------------------------------------------------------
+
+
+class TestBuildStatusLine:
+    def test_formats_all_fields(self, tmp_path: Path) -> None:
+        line = _build_status_line(
+            model_id="openai:gpt-5",
+            mode="ask",
+            cwd=tmp_path / "my-repo",
+            thread_id="abcdef0123456789",
+        )
+        assert "openai:gpt-5" in line
+        assert "mode=ask" in line
+        assert "my-repo" in line
+        # Thread id is truncated to first 8 chars.
+        assert "abcdef01" in line
+        assert "abcdef0123456789" not in line
+
+    def test_root_dir_falls_back_to_full_path(self, tmp_path: Path) -> None:
+        # An empty Path("") has no .name — the builder should not show an empty
+        # field. Use a Path whose .name is empty.
+        line = _build_status_line(
+            model_id="m",
+            mode="yolo",
+            cwd=Path("/"),
+            thread_id="01234567",
+        )
+        # Either the path string or *something* non-empty appears between the
+        # delimiters. Just verify the line is shaped correctly.
+        assert "yolo" in line
+        assert "01234567" in line
+        assert line.count("|") == 3

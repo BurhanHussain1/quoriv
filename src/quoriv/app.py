@@ -13,6 +13,10 @@ Wiring summary:
       the on-disk DB. A :class:`SessionRegistry` sidecar maps
       human-friendly names to ``thread_id`` values for the ``/save``,
       ``/load``, and ``/resume`` slash commands.
+    * Slice 8: persistent bottom status line (``model | mode | cwd |
+      thread``) and four new read-only slash commands — ``/tools``,
+      ``/memory``, ``/mode``, ``/cost``. ``/cost`` is a stub pending the
+      Slice 9 trace log; the other three introspect live session state.
 """
 
 from __future__ import annotations
@@ -39,7 +43,8 @@ from quoriv.core import (
     render_tool_start,
 )
 from quoriv.models import MissingAPIKeyError
-from quoriv.permissions import PermissionMode, is_read_only
+from quoriv.permissions import PermissionMode, interrupt_on_for_mode, is_read_only
+from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
     ApprovalDecision,
     StreamRenderer,
@@ -61,8 +66,37 @@ SLASH_COMMANDS: dict[str, str] = {
     "/save": "Save the current thread under a name (default: first 8 chars of thread id)",
     "/load": "Switch to a saved thread by name (no arg lists saved sessions)",
     "/resume": "Switch to the most-recently-saved thread",
+    "/tools": "List the tools the agent has available",
+    "/memory": "Show the status of memory files (~/.quoriv/memory.md, ./PROJECT.md)",
+    "/mode": "Show the current permission mode and what each mode gates",
+    "/cost": "Show approximate session cost (token tracking lands in Slice 9)",
     "/exit": "Exit the chat session",
     "/quit": "Exit the chat session (alias)",
+}
+
+
+# DeepAgents' built-in tools (invisible behind the compiled-graph abstraction,
+# so we list them by hand for ``/tools``). Mirrors what
+# :func:`deepagents.create_deep_agent` registers via ``FilesystemMiddleware`` /
+# ``LocalShellBackend`` / ``TodoMiddleware`` / ``SubAgentMiddleware``.
+_DEEPAGENTS_BUILTIN_TOOLS: tuple[tuple[str, str], ...] = (
+    ("write_todos", "Track and update the agent's structured todo list"),
+    ("ls", "List files and directories"),
+    ("read_file", "Read a file's contents"),
+    ("write_file", "Create or overwrite a file"),
+    ("edit_file", "Edit a file via search-and-replace"),
+    ("glob", "Find files by glob pattern"),
+    ("grep", "Literal-substring search of file contents"),
+    ("execute", "Run a shell command in the working directory"),
+    ("task", "Delegate work to a sub-agent"),
+)
+
+
+_MODE_DESCRIPTIONS: dict[PermissionMode, str] = {
+    "read-only": "Investigation only — every write / shell call is auto-denied at the prompt.",
+    "ask": "Prompt before every write_file / edit_file / git write / shell call.",
+    "auto": "Auto-run file/git writes; prompt only before shell execution.",
+    "yolo": "No prompts. Use with care.",
 }
 
 
@@ -121,7 +155,14 @@ async def run_chat(
             return
 
         _render_welcome(console, model_id=model_id, mode=mode, cwd=cwd_path)
-        await _interactive_loop(console, agent, registry, permission_mode)
+        await _interactive_loop(
+            console,
+            agent,
+            registry,
+            permission_mode,
+            model_id=model_id,
+            cwd=cwd_path,
+        )
 
 
 async def _interactive_loop(
@@ -129,10 +170,24 @@ async def _interactive_loop(
     agent: Any,
     registry: SessionRegistry,
     permission_mode: PermissionMode,
+    *,
+    model_id: str,
+    cwd: Path,
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits."""
-    session: PromptSession[str] = PromptSession()
     thread_id = _new_thread_id()
+
+    def _toolbar() -> str:
+        # Closure reads the latest ``thread_id`` because Python closures
+        # resolve names at call time, not definition time.
+        return _build_status_line(
+            model_id=model_id,
+            mode=permission_mode,
+            cwd=cwd,
+            thread_id=thread_id,
+        )
+
+    session: PromptSession[str] = PromptSession(bottom_toolbar=_toolbar)
 
     while True:
         try:
@@ -146,7 +201,15 @@ async def _interactive_loop(
             continue
 
         if user_input.startswith("/"):
-            command_result = _handle_slash(console, user_input, thread_id, registry)
+            command_result = _handle_slash(
+                console,
+                user_input,
+                thread_id,
+                registry,
+                model_id=model_id,
+                cwd=cwd,
+                mode=permission_mode,
+            )
             if command_result.exit:
                 return
             if command_result.new_thread_id is not None:
@@ -161,6 +224,21 @@ async def _interactive_loop(
         except Exception as exc:  # surface agent/network errors gracefully
             console.print(f"\n[red]Error:[/red] {exc}")
             continue
+
+
+def _build_status_line(
+    *,
+    model_id: str,
+    mode: PermissionMode,
+    cwd: Path,
+    thread_id: str,
+) -> str:
+    """Format the persistent bottom-toolbar string.
+
+    Kept a pure function so it can be unit-tested directly without
+    spinning up a :class:`PromptSession`.
+    """
+    return f" {model_id} | mode={mode} | {cwd.name or str(cwd)} | thread={thread_id[:8]} "
 
 
 # ---------------------------------------------------------------------------
@@ -218,11 +296,22 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
     raw: str,
     current_thread_id: str,
     registry: SessionRegistry,
+    *,
+    model_id: str = "(unset)",
+    cwd: Path | None = None,
+    mode: PermissionMode = "ask",
 ) -> _SlashResult:
-    """Dispatch a slash command and return what the caller should do next."""
+    """Dispatch a slash command and return what the caller should do next.
+
+    The keyword-only context parameters (``model_id``, ``cwd``, ``mode``)
+    feed the Slice 8 introspection commands (``/tools`` / ``/memory`` /
+    ``/mode``). They carry safe defaults so legacy call sites and tests
+    that pre-date Slice 8 still work without modification.
+    """
     parts = raw.split(maxsplit=1)
     cmd = parts[0].lower()
     arg = parts[1].strip() if len(parts) > 1 else ""
+    effective_cwd = cwd if cwd is not None else Path.cwd()
 
     if cmd in ("/exit", "/quit"):
         console.print("[dim]Goodbye.[/dim]")
@@ -250,7 +339,97 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
     if cmd == "/resume":
         return _handle_resume(console, registry)
 
+    if cmd == "/tools":
+        return _handle_tools(console)
+
+    if cmd == "/memory":
+        return _handle_memory(console, effective_cwd)
+
+    if cmd == "/mode":
+        return _handle_mode(console, mode)
+
+    if cmd == "/cost":
+        return _handle_cost(console)
+
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
+    return _SlashResult()
+
+
+# ---------------------------------------------------------------------------
+# Slice 8 — introspection helpers (/tools, /memory, /mode, /cost).
+# ---------------------------------------------------------------------------
+
+
+def _handle_tools(console: Console) -> _SlashResult:
+    """List the tools the agent has available, grouped by origin."""
+    console.print()
+    console.print("[bold]DeepAgents built-ins[/bold]")
+    for name, desc in _DEEPAGENTS_BUILTIN_TOOLS:
+        console.print(f"  [cyan]{name:<12}[/cyan]  {desc}")
+    console.print()
+    console.print("[bold]Quoriv tools[/bold]")
+    for tool in QUORIV_TOOLS:
+        description = (getattr(tool, "description", "") or "").splitlines()
+        summary = description[0] if description else ""
+        console.print(f"  [cyan]{tool.name:<12}[/cyan]  {summary}")
+    console.print()
+    return _SlashResult()
+
+
+def _handle_memory(console: Console, cwd: Path) -> _SlashResult:
+    """Show the status of memory files the agent would load."""
+    paths: list[tuple[str, Path]] = [
+        ("global", Path.home() / ".quoriv" / "memory.md"),
+        ("project", cwd / "PROJECT.md"),
+    ]
+    console.print()
+    console.print("[bold]Memory files[/bold]")
+    any_present = False
+    for label, path in paths:
+        if path.is_file():
+            any_present = True
+            size = path.stat().st_size
+            console.print(
+                f"  [green]✓[/green] {label:<8}  [cyan]{path}[/cyan]  [dim]({size} bytes)[/dim]"
+            )
+        else:
+            console.print(f"  [dim]·[/dim] {label:<8}  [dim]{path}[/dim]  [dim](not present)[/dim]")
+    if not any_present:
+        console.print("[dim]No memory files found. Create one of the paths above and the[/dim]")
+        console.print("[dim]agent will load it on next session start.[/dim]")
+    console.print()
+    return _SlashResult()
+
+
+def _handle_mode(console: Console, mode: PermissionMode) -> _SlashResult:
+    """Show the active permission mode and what each mode gates."""
+    gated = sorted(interrupt_on_for_mode(mode))
+    console.print()
+    console.print(f"[bold]Permission mode[/bold]: [cyan]{mode}[/cyan]")
+    console.print(f"  {_MODE_DESCRIPTIONS[mode]}")
+    if gated:
+        console.print(f"  Currently gates: [yellow]{', '.join(gated)}[/yellow]")
+    else:
+        console.print("  Currently gates: [dim](nothing — every tool runs without prompting)[/dim]")
+    console.print()
+    console.print("[bold]Available modes[/bold]")
+    for name, desc in _MODE_DESCRIPTIONS.items():
+        marker = "[green]●[/green]" if name == mode else "[dim]○[/dim]"
+        console.print(f"  {marker} [cyan]{name:<10}[/cyan] {desc}")
+    console.print()
+    console.print("[dim]Restart with [cyan]quoriv chat --mode <name>[/cyan] to switch.[/dim]")
+    console.print("[dim]Live-switch lands in a later slice.[/dim]")
+    console.print()
+    return _SlashResult()
+
+
+def _handle_cost(console: Console) -> _SlashResult:
+    """Stub the future cost-tracking surface (lands in Slice 9)."""
+    console.print()
+    console.print("[dim]Token tracking is not yet wired.[/dim]")
+    console.print("[dim]Slice 9 adds a local JSON trace log that records per-turn[/dim]")
+    console.print("[dim]token usage and surfaces it here.[/dim]")
+    console.print()
     return _SlashResult()
 
 

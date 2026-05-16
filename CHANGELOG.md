@@ -206,6 +206,30 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 321 → 350** (+29). All gates green.
 
+#### Phase 1 Slice 8 — Status line + introspection slash commands
+- `quoriv.app` — persistent `bottom_toolbar` wired into the `PromptSession`. New pure helper `_build_status_line(model_id, mode, cwd, thread_id)` returns the formatted bar:
+
+      <model_id> | mode=<mode> | <cwd basename> | thread=<first-8-chars>
+
+  Bottom-bar callable closes over the loop's `thread_id` so `/clear` / `/load` / `/resume` rotations are reflected on the next prompt without any extra plumbing.
+- Four new read-only slash commands wired through `_handle_slash` (now accepting keyword-only `model_id` / `cwd` / `mode` with safe defaults so legacy call sites and prior-slice tests still type-check):
+  - `/tools` — lists DeepAgents built-ins (`write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `execute`, `task`) under one heading and `QUORIV_TOOLS` (`find_symbol`, `git_*`, `run_tests`) under another, each with a one-line description.
+  - `/memory` — shows status of `~/.quoriv/memory.md` (global) and `<cwd>/PROJECT.md` (project): which exist + byte size, with a hint when neither is present. These are the files DeepAgents' `MemoryMiddleware` will load once `build_agent` wires `memory=[...]` in a later slice.
+  - `/mode` — prints the active permission mode, its description, the current `interrupt_on_for_mode(mode)` tool list (so the user sees exactly which tools will prompt), and the full available-modes table with the current one marked. Includes a hint that live-switching needs `quoriv chat --mode <name>` for now.
+  - `/cost` — explicit stub pointing at Slice 9 (token tracking arrives with the local JSON trace log).
+- `_handle_slash` dispatch extended with the four new commands. The function gained keyword-only `model_id` / `cwd` / `mode` parameters with defaults; `_interactive_loop` now also takes `model_id` / `cwd` and threads them into both the toolbar closure and the slash dispatcher.
+- `SLASH_COMMANDS` table extended so `/help` lists every new entry.
+- Two new module-level tables provide the source-of-truth descriptions: `_DEEPAGENTS_BUILTIN_TOOLS` (9 entries) and `_MODE_DESCRIPTIONS` (4 entries, keyed by `PermissionMode` Literal).
+- 10 new tests in `tests/unit/test_app_slash.py`:
+  - `TestSlice8SlashCommandsListed` (1) — all four new commands appear in `SLASH_COMMANDS`.
+  - `TestToolsCommand` (1) — output names representative built-ins (`write_todos`) and Quoriv tools (`git_status`, `run_tests`) under their respective headings.
+  - `TestMemoryCommand` (2) — empty-cwd reports "No memory files found"; `PROJECT.md` is detected and its byte count is shown.
+  - `TestModeCommand` (3) — `ask` mode lists every gated tool (including the git writes from Slice 5b); `yolo` mode reports nothing-gated; the available-modes table is always rendered.
+  - `TestCostCommand` (1) — output names the Slice 9 deferral plainly so the user knows where token tracking lands.
+  - `TestBuildStatusLine` (2) — pure-function checks: every field appears, `thread_id` is truncated to 8 chars, and the delimiter shape is stable for edge-case paths.
+
+**Test count: 350 → 360** (+10). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -224,8 +248,8 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
 - **Slice 6b:** Per-runner output parsing — extract `{passed, failed, errors, skipped, duration}` from each runner's terminal summary so the LLM gets counts without scanning stdout
-- **Slice 8:** `/cost`, `/tools`, `/memory`, `/mode` slash commands + persistent status line (`/save` / `/load` / `/resume` already shipped in Slice 7)
-- **Slice 9:** Local JSON trace log + integration tests
+- **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
+- **Slice 9:** Local JSON trace log + integration tests (also unblocks real `/cost` numbers)
 
 ---
 
