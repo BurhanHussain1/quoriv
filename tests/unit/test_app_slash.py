@@ -21,7 +21,7 @@ from quoriv.app import (
     _handle_slash,
 )
 from quoriv.core import SessionRegistry, trace_path
-from quoriv.observability import TraceLogger
+from quoriv.observability import ProviderRate, TraceLogger
 
 
 def _make_console() -> tuple[Console, StringIO]:
@@ -374,6 +374,57 @@ class TestCostCommand:
         output = buf.getvalue()
         assert "Estimated cost" in output
         assert "$0.0000" in output  # local-only models are free
+
+    # ----- Slice 9d: config-driven rate overrides --------------------------
+
+    def test_user_rate_override_shadows_builtin(self, tmp_path: Path) -> None:
+        # The built-in openai:gpt-5 rate is $0.01/1k input + $0.04/1k output.
+        # Override it to $0.05/1k input + $0.20/1k output via cost_rates and
+        # verify the displayed dollar amounts reflect the override.
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=1000, output_tokens=1000, total_tokens=2000)
+        custom_rates = {
+            "openai:gpt-5": ProviderRate(input_per_1k=0.05, output_per_1k=0.20),
+        }
+        console, buf = _make_console()
+        _handle_slash(
+            console,
+            "/cost",
+            "thread-1",
+            _registry(tmp_path),
+            tracer=tracer,
+            model_id="openai:gpt-5",
+            cost_rates=custom_rates,
+        )
+        output = buf.getvalue()
+        # 1k input @ $0.05 = $0.05; 1k output @ $0.20 = $0.20; total $0.25.
+        assert "$0.0500" in output
+        assert "$0.2000" in output
+        assert "$0.2500" in output
+
+    def test_user_rate_can_add_unknown_model(self, tmp_path: Path) -> None:
+        # A model not in the built-in RATES still renders a dollar
+        # estimate when the user supplies an override.
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=1000, output_tokens=0)
+        custom_rates = {
+            "acme:test-model": ProviderRate(input_per_1k=0.10, output_per_1k=0.30),
+        }
+        console, buf = _make_console()
+        _handle_slash(
+            console,
+            "/cost",
+            "thread-1",
+            _registry(tmp_path),
+            tracer=tracer,
+            model_id="acme:test-model",
+            cost_rates=custom_rates,
+        )
+        output = buf.getvalue()
+        assert "Estimated cost" in output
+        assert "acme:test-model" in output
+        assert "$0.1000" in output  # input cost
+        assert "No rate configured" not in output
 
 
 # ---------------------------------------------------------------------------

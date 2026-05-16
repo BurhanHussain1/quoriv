@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from quoriv.config.schema import (
+    CostConfig,
+    CostRate,
     ModelConfig,
     PermissionsConfig,
     QuorivConfig,
@@ -118,3 +120,63 @@ class TestToolsConfig:
 
     def test_disabled_defaults_to_empty(self) -> None:
         assert ToolsConfig().disabled == []
+
+
+# ---------------------------------------------------------------------------
+# CostConfig — Slice 9d
+# ---------------------------------------------------------------------------
+
+
+class TestCostConfig:
+    def test_defaults_to_empty_rates(self) -> None:
+        assert CostConfig().rates == {}
+
+    def test_quoriv_config_exposes_cost_section(self) -> None:
+        config = QuorivConfig.model_validate({})
+        assert config.cost.rates == {}
+
+    def test_rate_accepts_zero(self) -> None:
+        # Local-only providers (Ollama, vLLM) ship as 0.0/0.0 in the
+        # built-in table; user overrides must accept the same.
+        rate = CostRate.model_validate({"input_per_1k": 0.0, "output_per_1k": 0.0})
+        assert rate.input_per_1k == 0.0
+        assert rate.output_per_1k == 0.0
+
+    def test_rate_rejects_negative_input(self) -> None:
+        with pytest.raises(ValidationError):
+            CostRate.model_validate({"input_per_1k": -0.001, "output_per_1k": 0.01})
+
+    def test_rate_rejects_negative_output(self) -> None:
+        with pytest.raises(ValidationError):
+            CostRate.model_validate({"input_per_1k": 0.01, "output_per_1k": -0.001})
+
+    def test_rate_requires_both_fields(self) -> None:
+        with pytest.raises(ValidationError):
+            CostRate.model_validate({"input_per_1k": 0.01})
+        with pytest.raises(ValidationError):
+            CostRate.model_validate({"output_per_1k": 0.01})
+
+    def test_rate_rejects_extra_field(self) -> None:
+        with pytest.raises(ValidationError):
+            CostRate.model_validate(
+                {"input_per_1k": 0.01, "output_per_1k": 0.02, "currency": "USD"}
+            )
+
+    def test_cost_section_rejects_extra_field(self) -> None:
+        with pytest.raises(ValidationError):
+            CostConfig.model_validate({"rates": {}, "currency": "USD"})
+
+    def test_rates_map_round_trip(self) -> None:
+        config = QuorivConfig.model_validate(
+            {
+                "cost": {
+                    "rates": {
+                        "openai:gpt-4o": {"input_per_1k": 0.0030, "output_per_1k": 0.0120},
+                        "ollama:": {"input_per_1k": 0.0, "output_per_1k": 0.0},
+                    }
+                }
+            }
+        )
+        assert config.cost.rates["openai:gpt-4o"].input_per_1k == 0.0030
+        assert config.cost.rates["openai:gpt-4o"].output_per_1k == 0.0120
+        assert config.cost.rates["ollama:"].input_per_1k == 0.0

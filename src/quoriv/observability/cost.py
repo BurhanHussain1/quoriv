@@ -21,6 +21,10 @@ budgeting) but show a $0.00 estimate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quoriv.config import QuorivConfig
 
 
 @dataclass(frozen=True)
@@ -60,23 +64,60 @@ RATES: dict[str, ProviderRate] = {
 }
 
 
-def lookup_rate(model_id: str) -> ProviderRate | None:
+def lookup_rate(
+    model_id: str,
+    rates: dict[str, ProviderRate] | None = None,
+) -> ProviderRate | None:
     """Return the best (longest-prefix) :class:`ProviderRate` for ``model_id``.
 
     Args:
         model_id: A fully qualified id like ``"openai:gpt-5"`` or
             ``"anthropic:claude-sonnet-4"``. The same shape Quoriv uses
             elsewhere (provider colon model name).
+        rates: Optional rate table to search instead of the built-in
+            :data:`RATES`. Slice 9d threads ``effective_rates(config)``
+            through ``/cost`` so user overrides participate in the same
+            longest-prefix lookup.
 
     Returns:
         The rate entry whose key is the longest prefix of ``model_id``,
         or ``None`` if no key matches.
     """
-    matches = [key for key in RATES if model_id.startswith(key)]
+    table = rates if rates is not None else RATES
+    matches = [key for key in table if model_id.startswith(key)]
     if not matches:
         return None
     best = max(matches, key=len)
-    return RATES[best]
+    return table[best]
+
+
+def effective_rates(config: QuorivConfig | None = None) -> dict[str, ProviderRate]:
+    """Return the merged rate table after applying user ``cost.rates`` overrides.
+
+    The built-in :data:`RATES` is treated as read-only — this function
+    returns a fresh dict that combines built-ins with user-supplied
+    entries from ``config.cost.rates``. A user entry under an existing
+    key replaces the built-in; a user entry under a new key extends the
+    table. Longest-prefix lookup in :func:`lookup_rate` then operates
+    over the merged result so a fine-grained user key still wins over a
+    broader built-in.
+
+    Args:
+        config: Loaded Quoriv configuration, or ``None`` to fall back to
+            the built-in table unchanged.
+
+    Returns:
+        A new ``dict[str, ProviderRate]`` containing the merged table.
+    """
+    merged = dict(RATES)
+    if config is None:
+        return merged
+    for key, rate in config.cost.rates.items():
+        merged[key] = ProviderRate(
+            input_per_1k=rate.input_per_1k,
+            output_per_1k=rate.output_per_1k,
+        )
+    return merged
 
 
 def estimate_cost(

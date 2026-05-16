@@ -14,6 +14,7 @@ from __future__ import annotations
 from quoriv.observability.cost import (
     RATES,
     ProviderRate,
+    effective_rates,
     estimate_cost,
     lookup_rate,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "RATES",
     "ProviderRate",
     "TraceLogger",
+    "effective_rates",
     "estimate_cost",
     "lookup_rate",
 ]

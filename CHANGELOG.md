@@ -297,6 +297,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 437 → 500** (+63). All gates green.
 
+#### Phase 1 Slice 9d — Config-driven cost rates
+- `quoriv.config.schema` — two new Pydantic v2 models: `CostRate` (USD per 1,000 tokens with `Field(..., ge=0.0)` on both `input_per_1k` and `output_per_1k`) and `CostConfig` (`rates: dict[str, CostRate]`, defaults to empty). Both carry `extra="forbid"` so a typo in `~/.quoriv/config.toml` fails loudly at validation time. `QuorivConfig` gains a `cost: CostConfig = Field(default_factory=CostConfig)` section.
+- `quoriv.observability.cost.effective_rates(config) -> dict[str, ProviderRate]` — merges the user's `cost.rates` over a fresh copy of the built-in `RATES`. The built-in table is never mutated; the returned dict is fresh each call. `effective_rates(None)` returns a copy of `RATES` so callers without a config object still get the standard table.
+- `quoriv.observability.cost.lookup_rate` gained an optional second `rates` argument. Passing `None` falls back to the built-in `RATES` (legacy behaviour preserved). Passing the result of `effective_rates(config)` means longest-prefix lookup operates over the merged table — a user's fine-grained `anthropic:claude-opus-4-7` entry naturally wins over the broader built-in `anthropic:claude-opus-4` prefix.
+- `quoriv.observability.__init__` re-exports `effective_rates`.
+- `quoriv.app.run_chat` precomputes `cost_rates = effective_rates(config)` once per session and threads it through `_interactive_loop` → `_handle_slash` → `_handle_cost`. The new keyword-only `cost_rates` parameter carries a `None` default on every layer so older test entry points keep working.
+- The "no rate configured" hint in `/cost` now points the user at `[cost.rates."{provider}:{model}"]` in `~/.quoriv/config.toml` rather than at the in-source `RATES` dict, matching the new override path.
+- `config.example.toml` — documents the `[cost.rates."provider:model"]` block with example overrides, the non-negative-float constraint, and the longest-prefix lookup rule.
+- 20 new tests:
+  - `tests/unit/config/test_schema.py` `TestCostConfig` (8) — empty defaults, `QuorivConfig.cost.rates == {}`, rate accepts 0.0, rate rejects negative input / output, missing fields rejected, extra fields rejected on both `CostRate` and `CostConfig`, full round-trip through `QuorivConfig.model_validate`.
+  - `tests/unit/observability/test_cost.py` `TestLookupRateCustomTable` (3) — uses supplied table not built-in, longest-prefix within custom table, explicit `None` falls back to built-in.
+  - `tests/unit/observability/test_cost.py` `TestEffectiveRates` (6) — `None` returns a built-ins copy that is safe to mutate, empty config matches built-ins, user override replaces built-in by key (other entries survive), user can add a new provider, calling `effective_rates` does not mutate `RATES`, a more specific user key wins over a broader built-in prefix via merged-table longest-prefix.
+  - `tests/unit/test_app_slash.py` `TestCostCommand` (3 new) — user rate override shadows the built-in (1k input @ $0.05 + 1k output @ $0.20 → totals appear in `/cost`); user rate can add an unknown model so a previously rateless id now renders an estimate; legacy "No rate configured" hint absent when an override exists.
+
+**Test count: 500 → 520** (+20). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -315,7 +331,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
-- **Slice 9d:** Config-driven cost rates — let users override `quoriv.observability.cost.RATES` from `~/.quoriv/config.toml` so they can correct stale prices without editing source
 
 ---
 

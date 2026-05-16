@@ -50,7 +50,13 @@ from quoriv.core import (
     trace_path,
 )
 from quoriv.models import MissingAPIKeyError
-from quoriv.observability import TraceLogger, estimate_cost, lookup_rate
+from quoriv.observability import (
+    ProviderRate,
+    TraceLogger,
+    effective_rates,
+    estimate_cost,
+    lookup_rate,
+)
 from quoriv.permissions import PermissionMode, interrupt_on_for_mode, is_read_only
 from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
@@ -170,6 +176,7 @@ async def run_chat(
             permission_mode,
             model_id=model_id,
             cwd=cwd_path,
+            cost_rates=effective_rates(config),
         )
 
 
@@ -181,6 +188,7 @@ async def _interactive_loop(
     *,
     model_id: str,
     cwd: Path,
+    cost_rates: dict[str, ProviderRate] | None = None,
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits."""
     thread_id = _new_thread_id()
@@ -219,6 +227,7 @@ async def _interactive_loop(
                 cwd=cwd,
                 mode=permission_mode,
                 tracer=tracer,
+                cost_rates=cost_rates,
             )
             if command_result.exit:
                 return
@@ -322,14 +331,18 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
     cwd: Path | None = None,
     mode: PermissionMode = "ask",
     tracer: TraceLogger | None = None,
+    cost_rates: dict[str, ProviderRate] | None = None,
 ) -> _SlashResult:
     """Dispatch a slash command and return what the caller should do next.
 
     The keyword-only context parameters (``model_id``, ``cwd``, ``mode``,
-    ``tracer``) feed the Slice 8 + Slice 9 introspection commands
-    (``/tools`` / ``/memory`` / ``/mode`` / ``/cost``). They carry safe
-    defaults so legacy call sites and tests that pre-date these slices
-    still work without modification.
+    ``tracer``, ``cost_rates``) feed the Slice 8 + Slice 9 introspection
+    commands (``/tools`` / ``/memory`` / ``/mode`` / ``/cost``). They
+    carry safe defaults so legacy call sites and tests that pre-date
+    these slices still work without modification. ``cost_rates`` is the
+    merged effective rate table (built-ins + user ``cost.rates``
+    overrides); ``None`` falls back to the built-in :data:`RATES` for
+    ``/cost``.
     """
     parts = raw.split(maxsplit=1)
     cmd = parts[0].lower()
@@ -372,7 +385,7 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
         return _handle_mode(console, mode)
 
     if cmd == "/cost":
-        return _handle_cost(console, tracer, model_id=model_id)
+        return _handle_cost(console, tracer, model_id=model_id, cost_rates=cost_rates)
 
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
     return _SlashResult()
@@ -451,8 +464,15 @@ def _handle_cost(
     tracer: TraceLogger | None,
     *,
     model_id: str = "(unset)",
+    cost_rates: dict[str, ProviderRate] | None = None,
 ) -> _SlashResult:
-    """Show token totals + dollar estimate for the active thread."""
+    """Show token totals + dollar estimate for the active thread.
+
+    ``cost_rates`` is the merged effective rate table (built-ins + user
+    ``cost.rates`` overrides). ``None`` falls back to the built-in
+    :data:`quoriv.observability.cost.RATES` so the help-style call sites
+    in older tests keep working.
+    """
     console.print()
     if tracer is None:
         # Called outside a chat loop (e.g., from a test) — nothing to read.
@@ -474,13 +494,15 @@ def _handle_cost(
     console.print(f"  Calls:  [cyan]{totals['model_calls']:>8}[/cyan]")
 
     # Slice 9c: dollar cost estimate when the model_id is in the rate table.
-    rate = lookup_rate(model_id)
+    # Slice 9d: ``cost_rates`` is the effective table after merging the user's
+    # ``cost.rates`` overrides over the built-in :data:`RATES`.
+    rate = lookup_rate(model_id, cost_rates)
     if rate is None:
         console.print()
         console.print(f"[dim]No rate configured for model [cyan]{model_id}[/cyan] —[/dim]")
         console.print(
-            "[dim]update [cyan]quoriv.observability.cost.RATES[/cyan] "
-            "with the provider's per-1k-token price.[/dim]"
+            '[dim]add a [cyan][cost.rates."{provider}:{model}"][/cyan] entry '
+            "to [cyan]~/.quoriv/config.toml[/cyan] with the per-1k-token price.[/dim]"
         )
     else:
         costs = estimate_cost(rate, totals["input_tokens"], totals["output_tokens"])

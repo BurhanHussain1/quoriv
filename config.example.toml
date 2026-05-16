@@ -48,3 +48,26 @@ theme = "dark"
 # Names of built-in tools to disable.
 # Available tool names will be listed under `quoriv /tools` once Phase 1 lands.
 disabled = []
+
+
+# [cost.rates]
+# Per-model USD price overrides for the `/cost` slash command. Keys are
+# `provider:model` prefixes matched by longest-prefix lookup — a more
+# specific key wins over a broader one (e.g. an entry for
+# "openai:gpt-4o-mini" beats "openai:gpt-4o"). User entries shadow the
+# built-in table in `quoriv.observability.cost.RATES`, so this is where
+# you patch a price when a provider changes their pricing without
+# waiting for a Quoriv release.
+#
+# Both fields are required and must be non-negative floats (USD per
+# 1,000 tokens). Local-only providers should use 0.0 for both.
+#
+# Example — override the built-in gpt-4o price and add a new entry:
+#
+# [cost.rates."openai:gpt-4o"]
+# input_per_1k  = 0.0030
+# output_per_1k = 0.0120
+#
+# [cost.rates."anthropic:claude-opus-5"]
+# input_per_1k  = 0.0200
+# output_per_1k = 0.1000

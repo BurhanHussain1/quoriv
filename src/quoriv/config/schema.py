@@ -83,6 +83,46 @@ class ToolsConfig(BaseModel):
     )
 
 
+class CostRate(BaseModel):
+    """USD price per 1,000 tokens for one ``provider:model`` prefix.
+
+    Same shape as :class:`quoriv.observability.cost.ProviderRate` but as
+    a pydantic model so user-supplied values pass through TOML → schema
+    validation (non-negative floats) before reaching the rate table.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_per_1k: float = Field(
+        ...,
+        ge=0.0,
+        description="USD per 1,000 input tokens.",
+    )
+    output_per_1k: float = Field(
+        ...,
+        ge=0.0,
+        description="USD per 1,000 output tokens.",
+    )
+
+
+class CostConfig(BaseModel):
+    """User-supplied overrides for the ``/cost`` rate table.
+
+    Keys are ``provider:model`` prefixes matched by longest-prefix lookup
+    against the merged table — same rule as the built-in
+    :data:`quoriv.observability.cost.RATES`. A user entry with the same
+    key as a built-in shadows the built-in; an entry with a more
+    specific prefix wins via longest-match.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rates: dict[str, CostRate] = Field(
+        default_factory=dict,
+        description="Map of 'provider:model' prefix to CostRate.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -103,3 +143,4 @@ class QuorivConfig(BaseModel):
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    cost: CostConfig = Field(default_factory=CostConfig)
