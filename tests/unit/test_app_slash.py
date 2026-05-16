@@ -276,6 +276,64 @@ class TestModeCommand:
         for name in ("read-only", "ask", "auto", "yolo"):
             assert name in output
 
+    # ----- Slice 8b: live mode switch --------------------------------------
+
+    def test_no_arg_does_not_switch(self, tmp_path: Path) -> None:
+        # The legacy display-only form returns a result with no new_mode.
+        console, _buf = _make_console()
+        result = _handle_slash(console, "/mode", "current", _registry(tmp_path), mode="ask")
+        assert result.new_mode is None
+        assert result.exit is False
+
+    def test_valid_arg_returns_new_mode(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        result = _handle_slash(console, "/mode yolo", "current", _registry(tmp_path), mode="ask")
+        assert result.new_mode == "yolo"
+        # The handler itself doesn't print the "switched to" confirmation —
+        # that's the interactive loop's job once the rebuild succeeds. So
+        # the dispatch path returns silently when given a valid arg.
+        assert "switched" not in buf.getvalue().lower()
+
+    def test_valid_arg_with_uppercase_normalized(self, tmp_path: Path) -> None:
+        # ``YOLO`` should resolve to ``yolo`` so users don't get tripped up
+        # by case. The mode literal in the result must be the canonical
+        # lowercase form ALLOWED_MODES expects.
+        console, _buf = _make_console()
+        result = _handle_slash(console, "/mode YOLO", "current", _registry(tmp_path), mode="ask")
+        assert result.new_mode == "yolo"
+
+    def test_same_mode_does_not_switch(self, tmp_path: Path) -> None:
+        # Asking to switch to the current mode is a no-op — return a
+        # _SlashResult with no new_mode and a friendly note instead of
+        # forcing an agent rebuild for nothing.
+        console, buf = _make_console()
+        result = _handle_slash(console, "/mode ask", "current", _registry(tmp_path), mode="ask")
+        assert result.new_mode is None
+        assert "Already in" in buf.getvalue()
+
+    def test_invalid_arg_reports_error(self, tmp_path: Path) -> None:
+        console, buf = _make_console()
+        result = _handle_slash(console, "/mode banana", "current", _registry(tmp_path), mode="ask")
+        assert result.new_mode is None
+        output = buf.getvalue()
+        assert "unknown mode" in output.lower()
+        assert "banana" in output
+        # The valid set is surfaced so the user can correct the typo.
+        for name in ("read-only", "ask", "auto", "yolo"):
+            assert name in output
+
+    def test_all_modes_can_be_targets(self, tmp_path: Path) -> None:
+        # Round-trip every valid mode as a target from a different
+        # starting mode to guarantee no Literal-narrowing regression in
+        # the dispatch path.
+        for target in ("read-only", "ask", "auto", "yolo"):
+            start = "ask" if target != "ask" else "yolo"
+            console, _buf = _make_console()
+            result = _handle_slash(
+                console, f"/mode {target}", "current", _registry(tmp_path), mode=start
+            )
+            assert result.new_mode == target
+
 
 class TestCostCommand:
     def test_no_tracer_reports_disconnected(self, tmp_path: Path) -> None:

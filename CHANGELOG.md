@@ -313,6 +313,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 500 → 520** (+20). All gates green.
 
+#### Phase 1 Slice 8b — Live `/mode` switch
+- `/mode <name>` now rebuilds the compiled DeepAgent in place against the same `AsyncSqliteSaver` checkpointer. The running thread's conversational state survives the switch — only the `interrupt_on=` dict changes (via `interrupt_on_for_mode(new_mode)`). No restart, no new thread id.
+- `quoriv.app._SlashResult` gained a third slot, `new_mode: PermissionMode | None`. The interactive loop branches on it after a slash dispatch: when set, it calls `build_agent(config, model_override=..., cwd=..., mode=new_mode, checkpointer=saver)` and reassigns the local `agent`. The `_toolbar` closure reads the latest `permission_mode` at call time, so the status line reflects the new mode on the next prompt redraw without explicit refresh.
+- `_handle_mode` is now mode-aware: with no argument it preserves the Slice 8 display (current mode + gated tools + menu); with an argument it normalises to lowercase, validates against `ALLOWED_MODES`, short-circuits on same-mode requests with a friendly `"Already in <mode>"` note, and surfaces unknown values with the valid set listed inline. The closing line of the display variant now reads `Switch live with /mode <name>` instead of the stale `Live-switch lands in a later slice.`
+- `quoriv.app.run_chat` and `_interactive_loop` thread `config`, `model_override`, and the open `AsyncSqliteSaver` through as keyword-only args. All three default to `None` so legacy single-mode test entry points keep working without modification.
+- `SLASH_COMMANDS["/mode"]` description updated from `"Show the current permission mode and what each mode gates"` to `"Show permission mode (no arg) or live-switch (/mode <name>)"` so `/help` advertises the new form.
+- 6 new tests in `tests/unit/test_app_slash.py::TestModeCommand`:
+  - `test_no_arg_does_not_switch` — display-only path returns `_SlashResult(new_mode=None)`.
+  - `test_valid_arg_returns_new_mode` — `/mode yolo` from `ask` returns `_SlashResult(new_mode="yolo")` silently (the loop, not the handler, prints the confirmation).
+  - `test_valid_arg_with_uppercase_normalized` — `/mode YOLO` normalises to `"yolo"`.
+  - `test_same_mode_does_not_switch` — `/mode ask` while in `ask` prints `"Already in"` and returns no switch.
+  - `test_invalid_arg_reports_error` — `/mode banana` prints the unknown-mode error with the offending input and the full valid set; returns no switch.
+  - `test_all_modes_can_be_targets` — round-trips every valid mode as a target from a different starting mode to catch any `PermissionMode` literal-narrowing regression in the dispatch path.
+
+**Test count: 520 → 526** (+6). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -329,7 +345,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 1 — remaining slices)
-- **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
 
 ---

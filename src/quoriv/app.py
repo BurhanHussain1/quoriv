@@ -68,6 +68,7 @@ from quoriv.ui import (
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from quoriv.config import QuorivConfig
 
@@ -82,7 +83,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/resume": "Switch to the most-recently-saved thread",
     "/tools": "List the tools the agent has available",
     "/memory": "Show the status of memory files (~/.quoriv/memory.md, ./PROJECT.md)",
-    "/mode": "Show the current permission mode and what each mode gates",
+    "/mode": "Show permission mode (no arg) or live-switch (/mode <name>)",
     "/cost": "Show approximate session cost (token tracking lands in Slice 9)",
     "/exit": "Exit the chat session",
     "/quit": "Exit the chat session (alias)",
@@ -177,6 +178,9 @@ async def run_chat(
             model_id=model_id,
             cwd=cwd_path,
             cost_rates=effective_rates(config),
+            config=config,
+            model_override=model_override,
+            checkpointer=saver,
         )
 
 
@@ -189,14 +193,27 @@ async def _interactive_loop(
     model_id: str,
     cwd: Path,
     cost_rates: dict[str, ProviderRate] | None = None,
+    config: QuorivConfig | None = None,
+    model_override: str | None = None,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> None:
-    """Run the prompt → agent → render cycle until the user exits."""
+    """Run the prompt → agent → render cycle until the user exits.
+
+    Slice 8b: ``config``, ``model_override`` and ``checkpointer`` are
+    captured so ``/mode <name>`` can rebuild the compiled agent in
+    place via :func:`quoriv.core.build_agent` while reusing the same
+    checkpointer — the running thread's state survives the switch.
+    They default to ``None`` to keep older callers and tests that drive
+    a single fixed mode working without modification.
+    """
     thread_id = _new_thread_id()
     tracer = TraceLogger(trace_path(cwd, thread_id))
 
     def _toolbar() -> str:
-        # Closure reads the latest ``thread_id`` because Python closures
-        # resolve names at call time, not definition time.
+        # Closure reads the latest ``thread_id`` and ``permission_mode``
+        # because Python closures resolve names at call time, not
+        # definition time — so a live ``/mode`` switch is reflected on
+        # the status line on the very next prompt redraw.
         return _build_status_line(
             model_id=model_id,
             mode=permission_mode,
@@ -237,6 +254,26 @@ async def _interactive_loop(
                 # its file remains on disk for ``/cost`` against the prior
                 # thread (loadable via ``/load <name>`` later).
                 tracer = TraceLogger(trace_path(cwd, thread_id))
+            if command_result.new_mode is not None:
+                # Slice 8b: live mode switch. Rebuild the compiled agent
+                # against the same checkpointer so the running thread's
+                # state is unaffected — only the ``interrupt_on=`` dict
+                # changes. Falling back to the existing agent if any
+                # required wiring is missing keeps legacy callers that
+                # never pass ``config``/``checkpointer`` working.
+                new_mode = command_result.new_mode
+                if config is not None:
+                    agent = build_agent(
+                        config,
+                        model_override=model_override,
+                        cwd=cwd,
+                        mode=new_mode,
+                        checkpointer=checkpointer,
+                    )
+                permission_mode = new_mode
+                console.print(
+                    f"[green]Permission mode switched to[/green] [cyan]{permission_mode}[/cyan]."
+                )
             continue
 
         try:
@@ -314,11 +351,22 @@ def _render_missing_key(console: Console, exc: MissingAPIKeyError) -> None:
 class _SlashResult:
     """Outcome of dispatching a slash command."""
 
-    __slots__ = ("exit", "new_thread_id")
+    __slots__ = ("exit", "new_mode", "new_thread_id")
 
-    def __init__(self, *, exit: bool = False, new_thread_id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        exit: bool = False,
+        new_thread_id: str | None = None,
+        new_mode: PermissionMode | None = None,
+    ) -> None:
         self.exit = exit
         self.new_thread_id = new_thread_id
+        # Slice 8b: ``/mode <name>`` returns a ``_SlashResult`` with
+        # ``new_mode`` set; the interactive loop rebuilds the compiled
+        # agent in place against the same checkpointer so the running
+        # thread state survives the switch.
+        self.new_mode = new_mode
 
 
 def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one return per command
@@ -382,7 +430,7 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
         return _handle_memory(console, effective_cwd)
 
     if cmd == "/mode":
-        return _handle_mode(console, mode)
+        return _handle_mode(console, mode, arg)
 
     if cmd == "/cost":
         return _handle_cost(console, tracer, model_id=model_id, cost_rates=cost_rates)
@@ -437,8 +485,35 @@ def _handle_memory(console: Console, cwd: Path) -> _SlashResult:
     return _SlashResult()
 
 
-def _handle_mode(console: Console, mode: PermissionMode) -> _SlashResult:
-    """Show the active permission mode and what each mode gates."""
+def _handle_mode(console: Console, mode: PermissionMode, arg: str = "") -> _SlashResult:
+    """Show the active permission mode, or live-switch to a new one.
+
+    Slice 8b: ``/mode <name>`` rebuilds the compiled agent in place
+    against the same checkpointer, so the running thread's
+    conversational state survives the switch. ``/mode`` with no
+    argument keeps the original Slice 8 behavior — print the current
+    mode, the tools it gates, and the menu of alternatives.
+    """
+    if arg:
+        new_mode_arg = arg.strip().lower()
+        if new_mode_arg not in ALLOWED_MODES:
+            console.print()
+            console.print(
+                f"[red]/mode:[/red] unknown mode [yellow]{new_mode_arg!r}[/yellow].  "
+                f"Valid: {', '.join(ALLOWED_MODES)}"
+            )
+            console.print()
+            return _SlashResult()
+        if new_mode_arg == mode:
+            console.print()
+            console.print(f"[dim]Already in [cyan]{mode}[/cyan] mode — no change.[/dim]")
+            console.print()
+            return _SlashResult()
+        # mypy narrows new_mode_arg to PermissionMode after the
+        # ``new_mode_arg not in ALLOWED_MODES`` guard above.
+        new_mode: PermissionMode = new_mode_arg
+        return _SlashResult(new_mode=new_mode)
+
     gated = sorted(interrupt_on_for_mode(mode))
     console.print()
     console.print(f"[bold]Permission mode[/bold]: [cyan]{mode}[/cyan]")
@@ -453,8 +528,10 @@ def _handle_mode(console: Console, mode: PermissionMode) -> _SlashResult:
         marker = "[green]●[/green]" if name == mode else "[dim]○[/dim]"
         console.print(f"  {marker} [cyan]{name:<10}[/cyan] {desc}")
     console.print()
-    console.print("[dim]Restart with [cyan]quoriv chat --mode <name>[/cyan] to switch.[/dim]")
-    console.print("[dim]Live-switch lands in a later slice.[/dim]")
+    console.print(
+        "[dim]Switch live with [cyan]/mode <name>[/cyan] "
+        "(rebuilds the agent against the same thread).[/dim]"
+    )
     console.print()
     return _SlashResult()
 
