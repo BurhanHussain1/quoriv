@@ -107,4 +107,16 @@ secrets/
 *.spec
 pyinstaller-build/
 
+# ------------------------------------------------------------
+# Screenshots / scratch (CI debugging, design refs, etc.)
+# ------------------------------------------------------------
+Screenshot*.png
+Screenshot*.jpg
+*.png
+*.jpg
+*.jpeg
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+
 PROJECT_PLAN.md
