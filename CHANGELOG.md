@@ -252,6 +252,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 388 → 401** (+13). All gates green.
 
+#### Phase 1 Slice 9c — Per-provider dollar-cost estimates in `/cost`
+- `quoriv.observability.cost` — new module with the shipping rate table for `/cost`:
+  - `ProviderRate` — frozen dataclass `{input_per_1k: float, output_per_1k: float}` (USD).
+  - `RATES: dict[str, ProviderRate]` — 17 entries keyed by `provider:model` prefix. OpenAI (`gpt-5`, `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`), Anthropic (`claude-opus-4`, `claude-sonnet-4`, `claude-haiku-4`, `claude-3-5-sonnet`, `claude-3-5-haiku`, `claude-3-opus`, `claude-3-haiku`), Gemini (`gemini-1.5-pro`, `gemini-1.5-flash`), and local sentinels (`ollama:`, `vllm:` → free).
+  - `lookup_rate(model_id)` — longest-prefix match so `"openai:gpt-4o-mini"` resolves to its own entry rather than the broader `"openai:gpt-4o"`; versioned ids like `"openai:gpt-4o-2024-08-06"` fall back to the prefix.
+  - `estimate_cost(rate, input_tokens, output_tokens)` — returns `{input_cost_usd, output_cost_usd, total_cost_usd}` from the per-1k rate.
+- `quoriv.observability.__init__` re-exports `RATES`, `ProviderRate`, `lookup_rate`, `estimate_cost`.
+- `/cost` is no longer dollar-blind. `_handle_cost` gained a keyword-only `model_id` parameter, threaded through `_handle_slash`. When the model has a rate, output now includes an "Estimated cost" block with input/output/total dollar amounts to 4-decimal precision. When no rate is configured, a friendly "update `quoriv.observability.cost.RATES`" hint is printed alongside the token totals — the agent still gets actionable info without a stale or fabricated dollar figure.
+- 20 new tests:
+  - `tests/unit/observability/test_cost.py` (17): `TestProviderRate` (2) — frozen + value equality. `TestRatesTable` (5) — non-empty, every entry is `ProviderRate`, no negative rates, every known provider (openai/anthropic/gemini/ollama) has at least one row, every key contains a colon. `TestLookupRate` (6) — exact match, longest-prefix wins, versioned suffix falls back to the prefix, ollama sentinel matches every model, unknown provider returns `None`, empty id returns `None`. `TestEstimateCost` (4) — zero tokens, basic math, sub-thousand tokens, free rate zeros out.
+  - `tests/unit/test_app_slash.py` (3 new in `TestCostCommand`): known model shows dollar estimate with provider id; unknown model shows "No rate configured for ... — update RATES"; ollama renders `$0.0000`.
+
+**Test count: 401 → 421** (+20). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -272,7 +286,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - **Slice 6c:** Output parsers for cargo / go / npm — currently only pytest fills in `summary` counts; other frameworks return all-`None`
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
-- **Slice 9c:** Per-provider dollar-cost rate table feeding `/cost` (currently shows token counts only)
+- **Slice 9d:** Config-driven cost rates — let users override `quoriv.observability.cost.RATES` from `~/.quoriv/config.toml` so they can correct stale prices without editing source
 
 ---
 

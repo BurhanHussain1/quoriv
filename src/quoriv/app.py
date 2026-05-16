@@ -50,7 +50,7 @@ from quoriv.core import (
     trace_path,
 )
 from quoriv.models import MissingAPIKeyError
-from quoriv.observability import TraceLogger
+from quoriv.observability import TraceLogger, estimate_cost, lookup_rate
 from quoriv.permissions import PermissionMode, interrupt_on_for_mode, is_read_only
 from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
@@ -372,7 +372,7 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
         return _handle_mode(console, mode)
 
     if cmd == "/cost":
-        return _handle_cost(console, tracer)
+        return _handle_cost(console, tracer, model_id=model_id)
 
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
     return _SlashResult()
@@ -446,8 +446,13 @@ def _handle_mode(console: Console, mode: PermissionMode) -> _SlashResult:
     return _SlashResult()
 
 
-def _handle_cost(console: Console, tracer: TraceLogger | None) -> _SlashResult:
-    """Show token totals for the active thread, read from the trace log."""
+def _handle_cost(
+    console: Console,
+    tracer: TraceLogger | None,
+    *,
+    model_id: str = "(unset)",
+) -> _SlashResult:
+    """Show token totals + dollar estimate for the active thread."""
     console.print()
     if tracer is None:
         # Called outside a chat loop (e.g., from a test) — nothing to read.
@@ -467,8 +472,27 @@ def _handle_cost(console: Console, tracer: TraceLogger | None) -> _SlashResult:
     console.print(f"  Output: [cyan]{totals['output_tokens']:>8}[/cyan]")
     console.print(f"  Total:  [cyan]{totals['total_tokens']:>8}[/cyan]")
     console.print(f"  Calls:  [cyan]{totals['model_calls']:>8}[/cyan]")
+
+    # Slice 9c: dollar cost estimate when the model_id is in the rate table.
+    rate = lookup_rate(model_id)
+    if rate is None:
+        console.print()
+        console.print(f"[dim]No rate configured for model [cyan]{model_id}[/cyan] —[/dim]")
+        console.print(
+            "[dim]update [cyan]quoriv.observability.cost.RATES[/cyan] "
+            "with the provider's per-1k-token price.[/dim]"
+        )
+    else:
+        costs = estimate_cost(rate, totals["input_tokens"], totals["output_tokens"])
+        console.print()
+        console.print(f"[bold]Estimated cost[/bold] (model: [cyan]{model_id}[/cyan])")
+        console.print(f"  Input:  [green]${costs['input_cost_usd']:.4f}[/green]")
+        console.print(f"  Output: [green]${costs['output_cost_usd']:.4f}[/green]")
+        console.print(f"  Total:  [green]${costs['total_cost_usd']:.4f}[/green]")
+        console.print(
+            "[dim]Rates are approximate; update the table when provider pricing changes.[/dim]"
+        )
     console.print(f"[dim]Trace file: {tracer.path}[/dim]")
-    console.print("[dim]Dollar cost calc (per-provider rate table) lands in a later slice.[/dim]")
     console.print()
     return _SlashResult()
 

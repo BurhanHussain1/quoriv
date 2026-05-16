@@ -310,6 +310,65 @@ class TestCostCommand:
         _handle_slash(console, "/cost", "thread-1", _registry(tmp_path), tracer=tracer)
         assert "Trace file" in buf.getvalue()
 
+    # ----- Slice 9c: dollar-cost estimate ----------------------------------
+
+    def test_known_model_shows_dollar_estimate(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        # 1k input + 1k output at gpt-4o (input $0.0025/1k, output $0.0100/1k)
+        # → input $0.0025, output $0.0100, total $0.0125
+        tracer.log("model_complete", input_tokens=1000, output_tokens=1000, total_tokens=2000)
+        console, buf = _make_console()
+        _handle_slash(
+            console,
+            "/cost",
+            "thread-1",
+            _registry(tmp_path),
+            tracer=tracer,
+            model_id="openai:gpt-4o",
+        )
+        output = buf.getvalue()
+        assert "Estimated cost" in output
+        assert "openai:gpt-4o" in output
+        # Dollar amounts formatted to 4 decimal places — verify the totals.
+        assert "$0.0025" in output  # input
+        assert "$0.0100" in output  # output
+        assert "$0.0125" in output  # total
+
+    def test_unknown_model_shows_rate_not_configured(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=10, output_tokens=20)
+        console, buf = _make_console()
+        _handle_slash(
+            console,
+            "/cost",
+            "thread-1",
+            _registry(tmp_path),
+            tracer=tracer,
+            model_id="madeup:nonexistent-model",
+        )
+        output = buf.getvalue()
+        # Token totals still surface; the dollar block reports unknown rate.
+        assert "Token usage" in output
+        assert "No rate configured" in output
+        assert "madeup:nonexistent-model" in output
+        assert "Estimated cost" not in output
+
+    def test_ollama_renders_zero_dollar_estimate(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=5000, output_tokens=5000)
+        console, buf = _make_console()
+        _handle_slash(
+            console,
+            "/cost",
+            "thread-1",
+            _registry(tmp_path),
+            tracer=tracer,
+            model_id="ollama:llama3.2",
+        )
+        output = buf.getvalue()
+        assert "Estimated cost" in output
+        assert "$0.0000" in output  # local-only models are free
+
 
 # ---------------------------------------------------------------------------
 # Status-line builder (pure function — no PromptSession needed).
