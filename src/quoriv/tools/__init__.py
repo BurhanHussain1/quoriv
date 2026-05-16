@@ -17,7 +17,9 @@ Modules:
                 ``git_log`` / ``git_blame``. Slice 5b adds
                 ``git_add`` / ``git_commit`` / ``git_stash``, gated by HITL
                 via :data:`quoriv.permissions.GIT_WRITE_TOOLS`.
-    tests       (Slice 6) Language-aware test runner.
+    tests       Slice 6 ships ``run_tests`` — auto-detects pytest / npm /
+                cargo / go from marker files and runs the suite, returning
+                structured pass/fail metadata.
     web         (Phase 3) web_search and web_fetch.
 
 What's **not** here, and why:
@@ -42,6 +44,7 @@ from quoriv.tools.git import (
     git_stash,
     git_status,
 )
+from quoriv.tools.tests import run_tests
 
 QUORIV_TOOLS = [
     find_symbol,
@@ -52,6 +55,7 @@ QUORIV_TOOLS = [
     git_add,
     git_commit,
     git_stash,
+    run_tests,
 ]
 """Default Quoriv-specific tools handed to ``create_deep_agent(tools=...)``."""
 
@@ -65,4 +69,5 @@ __all__ = [
     "git_log",
     "git_stash",
     "git_status",
+    "run_tests",
 ]

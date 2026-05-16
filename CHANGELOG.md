@@ -186,6 +186,26 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 
 **Test count: 298 → 321** (+23). All gates green.
 
+#### Phase 1 Slice 6 — Language-aware `run_tests` tool
+- `quoriv.tools.tests` — new module with one `@tool` callable `run_tests(framework=None, path=None, cwd=".")` that auto-detects the project's test framework from marker files and runs the suite via `subprocess.run` (`shell=False`, list args, cwd-bound).
+- Detection (in order — first match wins, so a polyglot repo with both `pyproject.toml` and `package.json` defaults to Python, matching Quoriv's own layout):
+  - `pyproject.toml` / `pytest.ini` / `setup.cfg` → `pytest`
+  - `package.json` → `npm test`
+  - `Cargo.toml` → `cargo test`
+  - `go.mod` → `go test ./...`
+- Command construction (`_build_command`): each framework gets its idiomatic invocation. `pytest -q`, `npm test --silent`, `cargo test`, `go test ./...`. Path scoping uses the framework's native convention — positional arg for pytest, after `--` for npm/cargo, replaces `./...` for go.
+- Returns `{framework, command, exit_code, passed, stdout, stderr}` on success. The structured shape lets the LLM check `passed: bool` without parsing free-form output. On failure (no detection, cwd missing, unrecognized override, runner binary not on PATH) returns `{"error": "..."}` plus the attempted `framework` / `command` when known, so the agent can surface what was tried.
+- `quoriv.tools.__init__` registers `run_tests` in `QUORIV_TOOLS` and re-exports it. `run_tests` deliberately stays outside `GIT_WRITE_TOOLS` — it executes a runner locally without mutating repo state; the session's existing shell-execution gate applies via DeepAgents' `execute` if the underlying runner shells out further.
+- 29 new tests in `tests/unit/tools/test_runner.py`:
+  - `TestDetectFramework` (8) — each marker file maps to the right framework, empty dir returns None, polyglot tie-break favors Python.
+  - `TestBuildCommand` (9) — default + with-path for each framework, unknown framework raises `ValueError`.
+  - `TestRunTests` (10) — passes / failure-sets-passed-false, framework override (works even with no marker files), path scoping for pytest, no-framework-detected error, unknown-framework override error, nonexistent cwd error, runner-binary-missing error (with `framework` + `command` echo), subprocess called with resolved absolute cwd, `shell=` never set (subprocess defaults to `shell=False`).
+  - `TestToolRegistration` (2) — `run_tests` is a BaseTool with the right name and is present in `QUORIV_TOOLS`.
+
+Slice 6b (parsed test-count summary from each runner's output) is deferred.
+
+**Test count: 321 → 350** (+29). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -203,7 +223,7 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
-- **Slice 6:** Language-aware `run_tests` tool
+- **Slice 6b:** Per-runner output parsing — extract `{passed, failed, errors, skipped, duration}` from each runner's terminal summary so the LLM gets counts without scanning stdout
 - **Slice 8:** `/cost`, `/tools`, `/memory`, `/mode` slash commands + persistent status line (`/save` / `/load` / `/resume` already shipped in Slice 7)
 - **Slice 9:** Local JSON trace log + integration tests
 
