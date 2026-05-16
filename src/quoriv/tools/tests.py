@@ -1,4 +1,4 @@
-"""Language-aware test runner — Phase 1 Slice 6.
+"""Language-aware test runner — Phase 1 Slice 6 (+ 6b parsed pytest counts).
 
 Single ``@tool`` callable :func:`run_tests` that auto-detects the
 project's test framework by looking for marker files in ``cwd``:
@@ -14,13 +14,24 @@ can scope to a sub-path with ``path=``. Output is returned as structured
 output to decide whether the suite passed::
 
     {
-      "framework": str,        # "pytest" / "npm" / "cargo" / "go"
-      "command": list[str],    # exact argv invoked (no shell expansion)
+      "framework": str,                  # "pytest" / "npm" / "cargo" / "go"
+      "command": list[str],              # exact argv invoked (no shell expansion)
       "exit_code": int,
-      "passed": bool,          # exit_code == 0
+      "passed": bool,                    # exit_code == 0
       "stdout": str,
       "stderr": str,
+      "summary": {                       # Slice 6b — pytest only for now
+          "passed": int | None,
+          "failed": int | None,
+          "errors": int | None,
+          "skipped": int | None,
+          "duration_seconds": float | None,
+      },
     }
+
+For non-pytest frameworks the ``summary`` block is present but every
+field is ``None`` — that's the contract Slice 6c will fill in by adding
+cargo / go / jest output parsers.
 
 Failure paths set an ``"error"`` key (no test framework detected, no
 ``cwd``, runner binary missing from ``PATH``, etc.).
@@ -35,6 +46,7 @@ without mutating repo state.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -62,6 +74,88 @@ def _detect_framework(cwd: Path) -> Framework | None:
         if (cwd / marker).is_file():
             return framework
     return None
+
+
+# ---------------------------------------------------------------------------
+# Slice 6b — pytest output parsing.
+# ---------------------------------------------------------------------------
+
+
+# Matches pytest's terminal summary line. Real-world shapes:
+#     "============= 12 passed in 0.34s ============="
+#     "==== 5 passed, 2 failed, 1 error in 1.20s ===="
+#     "==== 1 failed in 0.05s ===="
+#     "==== no tests ran in 0.01s ===="
+#     "==== 3 passed, 1 skipped in 0.50s ===="
+# Anchor on the duration suffix to avoid matching unrelated "=" lines
+# (e.g., section headers). The summary line is always the LAST such match.
+_PYTEST_SUMMARY_RE = re.compile(
+    r"^=+\s*(?P<body>.*?)\s+in\s+(?P<duration>[\d.]+)s\b.*=+\s*$",
+    re.MULTILINE,
+)
+
+
+_PYTEST_COUNT_RE = re.compile(r"(?P<n>\d+)\s+(?P<kind>passed|failed|errors?|skipped)")
+
+
+_PYTEST_COUNT_KEYS: dict[str, str] = {
+    "passed": "passed",
+    "failed": "failed",
+    "error": "errors",
+    "errors": "errors",
+    "skipped": "skipped",
+}
+
+
+# What the ``summary`` block looks like when we couldn't extract anything
+# (non-pytest framework, or pytest with no summary line). Every field is
+# ``None`` so the agent can distinguish "0 failed" from "no info".
+_EMPTY_SUMMARY: dict[str, Any] = {
+    "passed": None,
+    "failed": None,
+    "errors": None,
+    "skipped": None,
+    "duration_seconds": None,
+}
+
+
+def _parse_pytest_summary(output: str) -> dict[str, Any]:
+    """Extract ``{passed, failed, errors, skipped, duration_seconds}`` from pytest output.
+
+    Returns each count as ``int`` (defaulting to 0 when pytest emitted a
+    summary line but omitted that category) and ``duration_seconds`` as
+    ``float``. When no recognizable summary line is found, returns the
+    all-``None`` shape from :data:`_EMPTY_SUMMARY` — the caller can tell
+    "we couldn't parse" from "0 of everything".
+    """
+    last_match: re.Match[str] | None = None
+    for match in _PYTEST_SUMMARY_RE.finditer(output):
+        last_match = match
+    if last_match is None:
+        return dict(_EMPTY_SUMMARY)
+
+    counts: dict[str, Any] = {
+        "passed": 0,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "duration_seconds": None,
+    }
+    try:
+        counts["duration_seconds"] = float(last_match.group("duration"))
+    except ValueError:
+        counts["duration_seconds"] = None
+
+    body = last_match.group("body")
+    for count_match in _PYTEST_COUNT_RE.finditer(body):
+        key = _PYTEST_COUNT_KEYS.get(count_match.group("kind"))
+        if key is None:
+            continue
+        try:
+            counts[key] = int(count_match.group("n"))
+        except ValueError:
+            continue
+    return counts
 
 
 def _build_command(framework: Framework, path: str | None) -> list[str]:
@@ -166,6 +260,13 @@ def run_tests(
             "command": command,
         }
 
+    # Slice 6b: pytest gets parsed counts; other frameworks get the
+    # all-None placeholder until Slice 6c adds their parsers.
+    if chosen == "pytest":
+        summary = _parse_pytest_summary(result.stdout + result.stderr)
+    else:
+        summary = dict(_EMPTY_SUMMARY)
+
     return {
         "framework": chosen,
         "command": command,
@@ -173,4 +274,5 @@ def run_tests(
         "passed": result.returncode == 0,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "summary": summary,
     }

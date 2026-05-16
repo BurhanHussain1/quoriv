@@ -242,6 +242,16 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 360 → 388** (+28). All gates green.
 
+#### Phase 1 Slice 6b — Parsed pytest counts in `run_tests`
+- `quoriv.tools.tests._parse_pytest_summary` — new pure helper that extracts `{passed, failed, errors, skipped, duration_seconds}` from the terminal summary line emitted by pytest. Regex anchors on the `"in <duration>s"` suffix so unrelated `===` separator lines never match; the last match in the output wins so per-session header lines do not pollute the result. Returns the all-`None` shape when no summary line is found — the caller can tell "couldn't parse" (e.g., pytest crashed at collection) from "0 of everything".
+- `run_tests` return shape gains a `summary` block with the parsed fields when `framework == "pytest"`. Other frameworks get the placeholder all-`None` summary until Slice 6c lands cargo / go / npm parsers — keeping the shape stable lets the LLM check `summary["passed"]` once instead of branching per framework.
+- Parser reads `stdout + stderr` concatenated so CI environments that redirect pytest output to stderr still get counts.
+- 13 new tests in `tests/unit/tools/test_runner.py`:
+  - `TestParsePytestSummary` (9) — passing-only, failed-only, mixed (passed/failed/errors), passed+skipped, `"no tests ran"`, plural `"errors"`, no-summary-line returns all-None, empty input returns all-None, last-match-wins when multiple `===` lines.
+  - `TestRunTests` (4 new) — pytest summary surfaces counts on the result dict; stderr summary parsed; pytest with no summary line returns null counts; non-pytest framework gets the all-None placeholder.
+
+**Test count: 388 → 401** (+13). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -259,7 +269,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
-- **Slice 6b:** Per-runner output parsing — extract `{passed, failed, errors, skipped, duration}` from each runner's terminal summary so the LLM gets counts without scanning stdout
+- **Slice 6c:** Output parsers for cargo / go / npm — currently only pytest fills in `summary` counts; other frameworks return all-`None`
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
 - **Slice 9c:** Per-provider dollar-cost rate table feeding `/cost` (currently shows token counts only)

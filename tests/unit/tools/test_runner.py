@@ -20,7 +20,12 @@ from typing import Any
 import pytest
 
 from quoriv.tools import QUORIV_TOOLS
-from quoriv.tools.tests import _build_command, _detect_framework, run_tests
+from quoriv.tools.tests import (
+    _build_command,
+    _detect_framework,
+    _parse_pytest_summary,
+    run_tests,
+)
 
 # ---------------------------------------------------------------------------
 # _detect_framework
@@ -102,6 +107,75 @@ class TestBuildCommand:
     def test_unknown_framework_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown framework"):
             _build_command("rspec", None)
+
+
+# ---------------------------------------------------------------------------
+# Slice 6b — _parse_pytest_summary
+# ---------------------------------------------------------------------------
+
+
+class TestParsePytestSummary:
+    def test_passing_only(self) -> None:
+        result = _parse_pytest_summary("============= 12 passed in 0.34s =============")
+        assert result == {
+            "passed": 12,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "duration_seconds": 0.34,
+        }
+
+    def test_failed_only(self) -> None:
+        result = _parse_pytest_summary("==== 1 failed in 0.05s ====")
+        assert result["failed"] == 1
+        assert result["passed"] == 0
+        assert result["duration_seconds"] == 0.05
+
+    def test_mixed_passed_failed_errors(self) -> None:
+        result = _parse_pytest_summary("==== 5 passed, 2 failed, 1 error in 1.20s ====")
+        assert result["passed"] == 5
+        assert result["failed"] == 2
+        assert result["errors"] == 1
+        assert result["duration_seconds"] == 1.2
+
+    def test_passed_and_skipped(self) -> None:
+        result = _parse_pytest_summary("==== 3 passed, 1 skipped in 0.50s ====")
+        assert result["passed"] == 3
+        assert result["skipped"] == 1
+        assert result["failed"] == 0
+
+    def test_no_tests_ran(self) -> None:
+        # "no tests ran in 0.01s" — every count stays 0, duration is captured.
+        result = _parse_pytest_summary("==== no tests ran in 0.01s ====")
+        assert result["passed"] == 0
+        assert result["failed"] == 0
+        assert result["duration_seconds"] == 0.01
+
+    def test_plural_errors(self) -> None:
+        # pytest emits "errors" (plural) when N > 1.
+        result = _parse_pytest_summary("==== 3 errors in 0.10s ====")
+        assert result["errors"] == 3
+
+    def test_no_summary_returns_all_none(self) -> None:
+        result = _parse_pytest_summary("collected 0 items\n\n=== there is no summary ===")
+        assert result == {
+            "passed": None,
+            "failed": None,
+            "errors": None,
+            "skipped": None,
+            "duration_seconds": None,
+        }
+
+    def test_empty_output_returns_all_none(self) -> None:
+        result = _parse_pytest_summary("")
+        assert all(v is None for v in result.values())
+
+    def test_uses_last_match_when_multiple(self) -> None:
+        # Pytest can emit multiple "=" separator lines during a run; only the
+        # final summary line (with the duration suffix) counts.
+        output = "===== test session starts =====\ncollected 3 items\n==== 3 passed in 0.10s ===="
+        result = _parse_pytest_summary(output)
+        assert result["passed"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +317,86 @@ class TestRunTests:
         calls = self._patch_subprocess(monkeypatch)
         run_tests.invoke({"cwd": str(tmp_path)})
         assert "shell" not in calls[0]
+
+    # ----- Slice 6b: parsed pytest counts -----------------------------------
+
+    def test_pytest_summary_surfaces_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(
+                returncode=1,
+                stdout="==== 5 passed, 2 failed, 1 error in 1.20s ====\n",
+                stderr="",
+            ),
+        )
+        result = run_tests.invoke({"cwd": str(tmp_path)})
+        summary = result["summary"]
+        assert summary["passed"] == 5
+        assert summary["failed"] == 2
+        assert summary["errors"] == 1
+        assert summary["skipped"] == 0
+        assert summary["duration_seconds"] == 1.2
+
+    def test_pytest_summary_in_stderr_is_still_parsed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Some CI environments redirect pytest's terminal output via stderr.
+        # Parser reads stdout + stderr concatenated.
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(
+                returncode=0,
+                stdout="",
+                stderr="==== 7 passed in 0.42s ====\n",
+            ),
+        )
+        result = run_tests.invoke({"cwd": str(tmp_path)})
+        assert result["summary"]["passed"] == 7
+
+    def test_pytest_with_no_summary_line_returns_null_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # If pytest crashed before emitting a summary (e.g., collection error),
+        # the summary fields remain None so the agent can tell "couldn't parse"
+        # from "0 passed".
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(returncode=2, stdout="ImportError: ...", stderr=""),
+        )
+        result = run_tests.invoke({"cwd": str(tmp_path)})
+        assert result["summary"]["passed"] is None
+        assert result["summary"]["duration_seconds"] is None
+
+    def test_non_pytest_framework_has_null_summary(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Slice 6b only parses pytest. Cargo / go / npm get the placeholder
+        # all-None summary until Slice 6c lands their parsers.
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(returncode=0, stdout="ok blah blah", stderr=""),
+        )
+        result = run_tests.invoke({"framework": "cargo", "cwd": str(tmp_path)})
+        assert result["summary"] == {
+            "passed": None,
+            "failed": None,
+            "errors": None,
+            "skipped": None,
+            "duration_seconds": None,
+        }
 
 
 # ---------------------------------------------------------------------------
