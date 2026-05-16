@@ -23,6 +23,9 @@ from quoriv.tools import QUORIV_TOOLS
 from quoriv.tools.tests import (
     _build_command,
     _detect_framework,
+    _parse_cargo_summary,
+    _parse_go_summary,
+    _parse_npm_summary,
     _parse_pytest_summary,
     run_tests,
 )
@@ -176,6 +179,136 @@ class TestParsePytestSummary:
         output = "===== test session starts =====\ncollected 3 items\n==== 3 passed in 0.10s ===="
         result = _parse_pytest_summary(output)
         assert result["passed"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Slice 6c — _parse_cargo_summary
+# ---------------------------------------------------------------------------
+
+
+class TestParseCargoSummary:
+    def test_single_package_success(self) -> None:
+        out = (
+            "test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; "
+            "0 filtered out; finished in 0.05s"
+        )
+        result = _parse_cargo_summary(out)
+        assert result["passed"] == 12
+        assert result["failed"] == 0
+        assert result["skipped"] == 1  # ignored maps to skipped
+        assert result["errors"] == 0
+        assert result["duration_seconds"] == pytest.approx(0.05)
+
+    def test_single_package_failure(self) -> None:
+        out = (
+            "test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; "
+            "0 filtered out; finished in 0.12s"
+        )
+        result = _parse_cargo_summary(out)
+        assert result["passed"] == 4
+        assert result["failed"] == 1
+        assert result["duration_seconds"] == pytest.approx(0.12)
+
+    def test_multi_package_sums_counts_and_durations(self) -> None:
+        out = (
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; "
+            "0 filtered out; finished in 0.03s\n"
+            "test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; "
+            "0 filtered out; finished in 0.04s"
+        )
+        result = _parse_cargo_summary(out)
+        assert result["passed"] == 8
+        assert result["failed"] == 2
+        assert result["duration_seconds"] == pytest.approx(0.07)
+
+    def test_no_summary_returns_all_none(self) -> None:
+        result = _parse_cargo_summary("Compiling foo\nerror[E0001]: ...")
+        assert all(v is None for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Slice 6c — _parse_go_summary
+# ---------------------------------------------------------------------------
+
+
+class TestParseGoSummary:
+    def test_per_test_pass_fail_skip_counts(self) -> None:
+        out = (
+            "--- PASS: TestFoo (0.00s)\n"
+            "--- FAIL: TestBar (0.01s)\n"
+            "--- SKIP: TestBaz (0.00s)\n"
+            "ok    pkg/a    0.05s\n"
+            "FAIL  pkg/b    0.12s"
+        )
+        result = _parse_go_summary(out)
+        assert result["passed"] == 1
+        assert result["failed"] == 1
+        assert result["skipped"] == 1
+        assert result["errors"] == 0
+        # Per-package durations sum: 0.05 + 0.12 = 0.17
+        assert result["duration_seconds"] == pytest.approx(0.17)
+
+    def test_only_package_summary_no_per_test_lines(self) -> None:
+        # When go test is run with -count=N and tests are short, sometimes
+        # only package-level summary appears. Counts stay 0, duration sums.
+        out = "ok    pkg/a    0.05s\nok    pkg/b    0.03s"
+        result = _parse_go_summary(out)
+        assert result["passed"] == 0
+        assert result["failed"] == 0
+        assert result["duration_seconds"] == pytest.approx(0.08)
+
+    def test_multiple_passes_only(self) -> None:
+        out = "--- PASS: TestA (0.00s)\n--- PASS: TestB (0.00s)\n--- PASS: TestC (0.00s)"
+        result = _parse_go_summary(out)
+        assert result["passed"] == 3
+        assert result["failed"] == 0
+        # No package summary line → no duration.
+        assert result["duration_seconds"] is None
+
+    def test_no_recognisable_output_returns_all_none(self) -> None:
+        result = _parse_go_summary("go: cannot find module")
+        assert all(v is None for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Slice 6c — _parse_npm_summary
+# ---------------------------------------------------------------------------
+
+
+class TestParseNpmSummary:
+    def test_jest_style_full_summary(self) -> None:
+        out = "Tests:       1 failed, 2 skipped, 5 passed, 8 total\nTime:        2.345 s"
+        result = _parse_npm_summary(out)
+        assert result["passed"] == 5
+        assert result["failed"] == 1
+        assert result["skipped"] == 2
+        assert result["errors"] == 0
+        assert result["duration_seconds"] == pytest.approx(2.345)
+
+    def test_passing_only(self) -> None:
+        out = "Tests:       12 passed, 12 total\nTime:        0.5 s"
+        result = _parse_npm_summary(out)
+        assert result["passed"] == 12
+        assert result["failed"] == 0
+        assert result["duration_seconds"] == pytest.approx(0.5)
+
+    def test_todo_and_pending_collapse_to_skipped(self) -> None:
+        # vitest emits "todo" / "pending"; jest emits "skipped". All three
+        # land in the same bucket.
+        out = "Tests:       2 todo, 1 pending, 3 passed, 6 total"
+        result = _parse_npm_summary(out)
+        assert result["skipped"] == 3
+        assert result["passed"] == 3
+
+    def test_no_summary_returns_all_none(self) -> None:
+        result = _parse_npm_summary("npm ERR! ...")
+        assert all(v is None for v in result.values())
+
+    def test_no_time_line_keeps_duration_none(self) -> None:
+        out = "Tests:       3 passed, 3 total"
+        result = _parse_npm_summary(out)
+        assert result["passed"] == 3
+        assert result["duration_seconds"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -378,13 +511,14 @@ class TestRunTests:
         assert result["summary"]["passed"] is None
         assert result["summary"]["duration_seconds"] is None
 
-    def test_non_pytest_framework_has_null_summary(
+    def test_unrecognised_output_still_returns_all_none_summary(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Slice 6b only parses pytest. Cargo / go / npm get the placeholder
-        # all-None summary until Slice 6c lands their parsers.
+        # Even with Slice 6c parsers for cargo/go/npm, output that doesn't
+        # match the expected summary shape falls back to all-None so the
+        # caller can distinguish "couldn't parse" from real zero counts.
         self._patch_subprocess(
             monkeypatch,
             _fake_completed(returncode=0, stdout="ok blah blah", stderr=""),
@@ -397,6 +531,71 @@ class TestRunTests:
             "skipped": None,
             "duration_seconds": None,
         }
+
+    # ----- Slice 6c: each framework dispatches to its own parser ------------
+
+    def test_cargo_summary_surfaces_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(
+                returncode=0,
+                stdout=(
+                    "test result: ok. 4 passed; 1 failed; 2 ignored; "
+                    "0 measured; 0 filtered out; finished in 0.12s\n"
+                ),
+                stderr="",
+            ),
+        )
+        result = run_tests.invoke({"framework": "cargo", "cwd": str(tmp_path)})
+        assert result["summary"]["passed"] == 4
+        assert result["summary"]["failed"] == 1
+        assert result["summary"]["skipped"] == 2
+        assert result["summary"]["duration_seconds"] == pytest.approx(0.12)
+
+    def test_go_summary_surfaces_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(
+                returncode=0,
+                stdout=(
+                    "--- PASS: TestA (0.00s)\n"
+                    "--- PASS: TestB (0.00s)\n"
+                    "--- FAIL: TestC (0.01s)\n"
+                    "ok    pkg/a    0.05s\n"
+                ),
+                stderr="",
+            ),
+        )
+        result = run_tests.invoke({"framework": "go", "cwd": str(tmp_path)})
+        assert result["summary"]["passed"] == 2
+        assert result["summary"]["failed"] == 1
+        assert result["summary"]["duration_seconds"] == pytest.approx(0.05)
+
+    def test_npm_summary_surfaces_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._patch_subprocess(
+            monkeypatch,
+            _fake_completed(
+                returncode=0,
+                stdout=("Tests:       1 failed, 5 passed, 6 total\nTime:        1.2 s\n"),
+                stderr="",
+            ),
+        )
+        result = run_tests.invoke({"framework": "npm", "cwd": str(tmp_path)})
+        assert result["summary"]["passed"] == 5
+        assert result["summary"]["failed"] == 1
+        assert result["summary"]["duration_seconds"] == pytest.approx(1.2)
 
 
 # ---------------------------------------------------------------------------

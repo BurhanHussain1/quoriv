@@ -266,6 +266,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 401 → 421** (+20). All gates green.
 
+#### Phase 1 Slice 6c — cargo / go / npm output parsers
+- `quoriv.tools.tests` extended with three pure helpers that mirror `_parse_pytest_summary`'s contract — input = combined stdout+stderr, output = `{passed, failed, errors, skipped, duration_seconds}` with the all-`None` fallback when nothing matches:
+  - `_parse_cargo_summary` — matches `test result: ok. N passed; M failed; K ignored; ...; finished in Xs` lines (one per test binary). Multi-crate workspaces produce multiple summary lines; counts and durations are summed across all of them. `ignored` maps to `skipped`. cargo doesn't distinguish errors from failures so `errors` is always 0.
+  - `_parse_go_summary` — counts per-test status lines (`--- PASS:` / `--- FAIL:` / `--- SKIP:`) for the count fields, and sums per-package summary durations (`ok pkg X.XXs` / `FAIL pkg X.XXs`). When only one or the other appears, the absent fields stay None or 0 in a documented way.
+  - `_parse_npm_summary` — parses jest / vitest-style summary blocks (`Tests: N passed, M failed, K total` + `Time: X.XX s`). vitest's `todo` / `pending` categories collapse into `skipped` to keep the cross-runner shape stable. Other npm runners (mocha, ava, …) fall through to the all-`None` shape — they emit summaries in different formats and aren't covered by this slice.
+- `_FRAMEWORK_PARSERS` dispatch dict replaces the `if chosen == "pytest"` branch in `run_tests`. Adding a new framework now means adding a marker file, command builder, and parser entry — all three concerns sit next to each other in the module.
+- The all-`None` fallback still applies when a framework's runner emits output that doesn't match the expected summary shape (e.g., cargo compile error before tests run), so the caller can still tell "couldn't parse" from real zero counts. The Slice 6b test that exercised the placeholder path was renamed and rewritten to assert this contract under the new parsers.
+- 16 new tests in `tests/unit/tools/test_runner.py`:
+  - `TestParseCargoSummary` (4) — single-package success, single-package failure, multi-package counts + duration sum, no-summary returns all-None.
+  - `TestParseGoSummary` (4) — `--- PASS / FAIL / SKIP` counts with package-duration sum, package-summary-only zero counts but non-None duration, multiple passes only (no package summary → duration stays None), no-recognisable-output returns all-None.
+  - `TestParseNpmSummary` (5) — jest-style full summary, passing-only, `todo` + `pending` collapse to `skipped`, no-summary returns all-None, no `Time:` line keeps duration None.
+  - `TestRunTests` (3 new) — each new framework dispatches to its own parser end-to-end through `run_tests`.
+
+**Test count: 421 → 437** (+16). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -283,7 +298,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
-- **Slice 6c:** Output parsers for cargo / go / npm — currently only pytest fills in `summary` counts; other frameworks return all-`None`
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
 - **Slice 9d:** Config-driven cost rates — let users override `quoriv.observability.cost.RATES` from `~/.quoriv/config.toml` so they can correct stale prices without editing source
