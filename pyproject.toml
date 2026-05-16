@@ -71,10 +71,12 @@ dependencies = [
 # Optional dependency groups (installed on demand)
 # --------------------------------------------------------------------------
 [project.optional-dependencies]
-# Tree-sitter AST tools (Phase 1)
+# Tree-sitter AST tools (Phase 1). ``tree-sitter-language-pack`` is the
+# maintained successor to the (abandoned) ``tree-sitter-languages`` —
+# same all-in-one bundle, ~80 languages, ships wheels for Python 3.10–3.13.
 ast = [
-    "tree-sitter>=0.22.0",
-    "tree-sitter-languages>=1.10.2",
+    "tree-sitter>=0.24.0",
+    "tree-sitter-language-pack>=0.6.0",
 ]
 
 # MCP plugin support (Phase 2)

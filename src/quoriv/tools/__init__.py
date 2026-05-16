@@ -10,9 +10,10 @@ This package contains the tools DeepAgents does **not** ship — registered as
 plain callables and passed to ``create_deep_agent`` via ``tools=[...]``.
 
 Modules:
-    ast_tools   Slice 4 ships a Python-only ``find_symbol``. Slice 4b adds
-                tree-sitter-based ``go_to_definition`` / ``find_references``
-                for ~30 languages.
+    ast_tools   Slice 4 shipped a Python-only ``find_symbol``. Slice 4b
+                expanded it to multi-language via tree-sitter (Python /
+                JS / TS / Go / Rust / Java / C / C++ / C# / Ruby / PHP /
+                ...) and added ``go_to_definition`` + ``find_references``.
     git         Slice 5 ships read-only ``git_status`` / ``git_diff`` /
                 ``git_log`` / ``git_blame``. Slice 5b adds
                 ``git_add`` / ``git_commit`` / ``git_stash``, gated by HITL
@@ -34,7 +35,7 @@ What's **not** here, and why:
 
 from __future__ import annotations
 
-from quoriv.tools.ast_tools import find_symbol
+from quoriv.tools.ast_tools import find_references, find_symbol, go_to_definition
 from quoriv.tools.git import (
     git_add,
     git_blame,
@@ -48,6 +49,8 @@ from quoriv.tools.tests import run_tests
 
 QUORIV_TOOLS = [
     find_symbol,
+    go_to_definition,
+    find_references,
     git_status,
     git_diff,
     git_log,
@@ -61,6 +64,7 @@ QUORIV_TOOLS = [
 
 __all__ = [
     "QUORIV_TOOLS",
+    "find_references",
     "find_symbol",
     "git_add",
     "git_blame",
@@ -69,5 +73,6 @@ __all__ = [
     "git_log",
     "git_stash",
     "git_status",
+    "go_to_definition",
     "run_tests",
 ]

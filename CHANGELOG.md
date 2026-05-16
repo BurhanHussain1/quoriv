@@ -281,6 +281,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 421 → 437** (+16). All gates green.
 
+#### Phase 1 Slice 4b — Tree-sitter multi-language symbol intelligence
+- Migrated the `ast` extra from the abandoned `tree-sitter-languages` (no Python 3.13 wheels) to the maintained `tree-sitter-language-pack>=0.6.0` and bumped `tree-sitter>=0.24.0`. The new pack ships bundled C wheels for Python 3.10-3.13 on Linux / macOS / Windows and covers ~80 languages.
+- `quoriv.repo.ast` — new module: `LANGUAGE_BY_EXTENSION` (40+ entries), `detect_language(path)` by suffix, `get_parser(language)` lazy-loaded from the pack, `is_available()` so callers without the extra installed degrade gracefully. The lazy imports keep the rest of Quoriv working when someone installs without `[ast]`.
+- `quoriv.repo.symbols` — new module with `Symbol` frozen dataclass and two public functions: `extract_definitions(source, language, *, target=None)` and `find_references(source, language, target)`. Per-language `DEFINITION_KINDS` maps tree-sitter node kinds to Quoriv symbol kinds for python / javascript / typescript / tsx / go / rust / java / kotlin / c / cpp / csharp / ruby / php / lua / elixir / swift. `CONTAINER_KINDS` tracks scopes (class / struct / trait / impl / module / namespace / protocol / interface / enum) so nested method definitions record their `parent`. Uses direct tree walks (not `QueryCursor`) because the language pack ships its own `Node` class that's binary-incompatible with the public `tree_sitter` Query API.
+- `quoriv.tools.ast_tools` expanded:
+  - `find_symbol` is now multi-language. Python (`.py` / `.pyi`) keeps the stdlib `ast` path (no extra needed); every other extension routes through tree-sitter via `quoriv.repo.symbols`.
+  - New `@tool` callables: `go_to_definition(name, path=".")` — strict alias of `find_symbol` named for the agent's "jump-to-def" intent; `find_references(name, path=".")` — every identifier-like node whose text equals `name` (definition + callers + type uses + field accesses).
+  - `_iter_source_files` walks the path, skipping common build / vendor dirs (`.venv`, `venv`, `__pycache__`, `.git`, `build`, `dist`, `node_modules`, `target`).
+- `QUORIV_TOOLS` now exposes 11 tools: `find_symbol`, `go_to_definition`, `find_references`, the 7 git tools, and `run_tests`.
+- 63 new tests across three files:
+  - `tests/unit/repo/test_ast.py` (26) — extension → language for 21 file types, table sanity, case insensitivity, parser smoke tests for python/go, unknown language → `LookupError`.
+  - `tests/unit/repo/test_symbols.py` (14) — Symbol frozenness, table coverage, Python def/class/method extraction with parent, Python reference search hits both def and call sites, Go type/method/function extraction, Go reference search across declarations and uses, TypeScript interface/type/class/method/function, Rust struct/trait/impl/function, graceful empty-list for unsupported languages.
+  - `tests/unit/tools/test_ast_tools.py` (23 new) — `TestFindSymbolMultiLanguage` (5) covers go/ts/rust + `node_modules` / `target` skip + a mixed-language file tree. `TestGoToDefinition` (3) verifies alias semantics + registration. `TestFindReferences` (6) covers Go callsites, TS field access, empty/missing cases, registration.
+
+**Test count: 437 → 500** (+63). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -297,7 +313,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 1 — remaining slices)
-- **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
 - **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
 - **Slice 9d:** Config-driven cost rates — let users override `quoriv.observability.cost.RATES` from `~/.quoriv/config.toml` so they can correct stale prices without editing source
