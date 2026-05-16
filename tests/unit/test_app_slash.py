@@ -25,8 +25,14 @@ from quoriv.observability import TraceLogger
 
 
 def _make_console() -> tuple[Console, StringIO]:
+    # ``width=10_000`` effectively disables Rich's hard wrapping. ``/memory``
+    # prints absolute filesystem paths, and macOS's tmp directory
+    # (``/private/var/folders/.../pytest-of-runner/.../PROJECT.md``) is long
+    # enough to break ``"PROJECT.md" in output`` assertions when the path
+    # wraps at column 120 mid-token (CI-only regression observed on
+    # macos-latest before this bump).
     buf = StringIO()
-    console = Console(file=buf, width=120, force_terminal=False, no_color=True)
+    console = Console(file=buf, width=10_000, force_terminal=False, no_color=True)
     return console, buf
 
 
