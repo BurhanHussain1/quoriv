@@ -171,6 +171,21 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 
 **Test count: 254 → 298** (+44). All gates green.
 
+#### Phase 1 Slice 5b — Git write tools (HITL-gated)
+- `quoriv.tools.git` extended with three write callables sharing the same `subprocess.run` (`shell=False`, list args, `cwd`-bound) and `dict[str, Any]` return shape as the read tools:
+  - `git_add(paths=None, cwd=".")` — stages specific paths or all changes (`git add -A`). Returns `{"staged_files": list[str]}` from `git diff --cached --name-only` after the add. Empty `paths` list is treated as "add all".
+  - `git_commit(message, cwd=".")` — creates a commit from the current index. Returns `{"sha", "short_sha", "subject", "branch": str | None}` parsed from `git rev-parse` / `git log -1` rather than the locale-sensitive `git commit` output. Empty message rejected locally with a structured error.
+  - `git_stash(message=None, include_untracked=False, cwd=".")` — pushes the working tree onto the stash. Returns `{"stashed": bool, "message": str | None}` — `stashed=False` when git printed `"No local changes to save"`.
+- All three respect local git config: no `--no-gpg-sign`, no `--no-verify`. Tests configure `commit.gpgsign=false` per fixture repo so signing-required hosts do not block the suite.
+- `quoriv.permissions.modes.GIT_WRITE_TOOLS = frozenset({"git_add", "git_commit", "git_stash"})` — Quoriv-specific git tools that mutate repo state, gated alongside `WRITE_TOOLS` in `ask` / `read-only` modes. `auto` mode lets them run silently (like `write_file`); `yolo` lets everything through.
+- `interrupt_on_for_mode("ask")` and `interrupt_on_for_mode("read-only")` now include the new tool names; `auto` and `yolo` deliberately do not.
+- `quoriv.permissions.__init__` re-exports `GIT_WRITE_TOOLS`. `quoriv.tools.__init__` extends `QUORIV_TOOLS` to include the three new tools and re-exports them.
+- 23 new tests:
+  - `tests/unit/permissions/test_modes.py` (5) — `GIT_WRITE_TOOLS` membership shape, pairwise-disjoint with `WRITE_TOOLS` and `SHELL_TOOLS`, `auto` does NOT gate them, `ask` does, `read-only` does.
+  - `tests/unit/tools/test_git.py` (18): `TestGitAdd` (6) — add-all, specific paths, empty-paths defaults, nonexistent path errors, clean-repo returns empty, not-a-repo errors. `TestGitCommit` (5) — staged commit, nothing-staged errors, empty-message rejected locally, subject is first line, not-a-repo errors. `TestGitStash` (5) — with changes, with no changes (`stashed=False`), with message, `-u` includes untracked, not-a-repo errors. `TestToolRegistration` parametrizes over all 7 git tools now.
+
+**Test count: 298 → 321** (+23). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -188,7 +203,6 @@ Slice 4b (tree-sitter expansion for ~30 languages, `go_to_definition`, `find_ref
 
 ### Coming next (Phase 1 — remaining slices)
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
-- **Slice 5b:** Git **write** ops — `git_add`, `git_commit`, `git_stash` behind `interrupt_on=` (deferred from Slice 5)
 - **Slice 6:** Language-aware `run_tests` tool
 - **Slice 8:** `/cost`, `/tools`, `/memory`, `/mode` slash commands + persistent status line (`/save` / `/load` / `/resume` already shipped in Slice 7)
 - **Slice 9:** Local JSON trace log + integration tests

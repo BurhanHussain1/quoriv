@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from quoriv.permissions.modes import (
+    GIT_WRITE_TOOLS,
     SHELL_TOOLS,
     WRITE_TOOLS,
     interrupt_on_for_mode,
@@ -24,8 +25,13 @@ class TestToolSets:
     def test_shell_tools_includes_execute(self) -> None:
         assert "execute" in SHELL_TOOLS
 
-    def test_sets_are_disjoint(self) -> None:
+    def test_git_write_tools_membership(self) -> None:
+        assert frozenset({"git_add", "git_commit", "git_stash"}) == GIT_WRITE_TOOLS
+
+    def test_sets_are_pairwise_disjoint(self) -> None:
         assert WRITE_TOOLS.isdisjoint(SHELL_TOOLS)
+        assert WRITE_TOOLS.isdisjoint(GIT_WRITE_TOOLS)
+        assert GIT_WRITE_TOOLS.isdisjoint(SHELL_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -43,16 +49,33 @@ class TestInterruptOnForMode:
         assert "write_file" not in result
         assert "edit_file" not in result
 
+    def test_auto_does_not_gate_git_writes(self) -> None:
+        # ``auto`` lets state-changing tools (fs writes, git writes) run
+        # silently — only shell prompts. This mirrors how write_file behaves.
+        result = interrupt_on_for_mode("auto")
+        for name in GIT_WRITE_TOOLS:
+            assert name not in result
+
     def test_ask_prompts_for_writes_and_shell(self) -> None:
         result = interrupt_on_for_mode("ask")
         assert result.get("write_file") is True
         assert result.get("edit_file") is True
         assert result.get("execute") is True
 
+    def test_ask_prompts_for_git_writes(self) -> None:
+        result = interrupt_on_for_mode("ask")
+        for name in GIT_WRITE_TOOLS:
+            assert result.get(name) is True
+
+    def test_read_only_prompts_for_git_writes(self) -> None:
+        result = interrupt_on_for_mode("read-only")
+        for name in GIT_WRITE_TOOLS:
+            assert result.get(name) is True
+
     def test_read_only_matches_ask(self) -> None:
         # Implementation detail of Phase 1 Slice 1: read-only piggybacks on
-        # ask's interrupt list; the UI auto-denies writes (Slice 2). Phase 1
-        # Slice 1b will add hard tool exclusion via custom middleware.
+        # ask's interrupt list; the UI auto-denies writes (Slice 2). Slice 1b
+        # added hard path-protection via custom middleware on top.
         assert interrupt_on_for_mode("read-only") == interrupt_on_for_mode("ask")
 
     @pytest.mark.parametrize("mode", ["yolo", "auto", "ask", "read-only"])

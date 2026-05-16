@@ -12,9 +12,12 @@ from quoriv.tools import QUORIV_TOOLS
 from quoriv.tools.git import (
     _parse_branch_line,
     _parse_status_porcelain,
+    git_add,
     git_blame,
+    git_commit,
     git_diff,
     git_log,
+    git_stash,
     git_status,
 )
 
@@ -408,6 +411,144 @@ class TestGitBlame:
 
 
 # ---------------------------------------------------------------------------
+# git_add integration tests.
+# ---------------------------------------------------------------------------
+
+
+class TestGitAdd:
+    def test_add_all_with_no_paths(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "a\n")
+        _write(repo, "b.txt", "b\n")
+        result = git_add.invoke({"cwd": str(repo)})
+        assert "error" not in result
+        assert set(result["staged_files"]) == {"a.txt", "b.txt"}
+
+    def test_add_specific_paths(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "a\n")
+        _write(repo, "b.txt", "b\n")
+        result = git_add.invoke({"paths": ["a.txt"], "cwd": str(repo)})
+        assert result["staged_files"] == ["a.txt"]
+
+    def test_add_empty_paths_treated_as_add_all(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "a\n")
+        result = git_add.invoke({"paths": [], "cwd": str(repo)})
+        assert result["staged_files"] == ["a.txt"]
+
+    def test_add_nonexistent_path_returns_error(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        result = git_add.invoke({"paths": ["does-not-exist.txt"], "cwd": str(repo)})
+        assert "error" in result
+
+    def test_add_in_clean_repo_returns_empty(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "a\n")
+        _commit(repo, "initial")
+        result = git_add.invoke({"cwd": str(repo)})
+        assert result["staged_files"] == []
+
+    def test_add_not_a_repo_returns_error(self, tmp_path: Path) -> None:
+        result = git_add.invoke({"cwd": str(tmp_path)})
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# git_commit integration tests.
+# ---------------------------------------------------------------------------
+
+
+class TestGitCommit:
+    def test_commit_with_staged_changes(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "hello\n")
+        _git(repo, "add", "a.txt")
+        result = git_commit.invoke({"message": "first commit", "cwd": str(repo)})
+        assert "error" not in result
+        assert result["subject"] == "first commit"
+        assert result["branch"] == "main"
+        assert len(result["sha"]) == 40
+        assert len(result["short_sha"]) >= 7
+
+    def test_commit_with_nothing_staged_returns_error(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        result = git_commit.invoke({"message": "empty", "cwd": str(repo)})
+        assert "error" in result
+
+    def test_commit_empty_message_rejected_locally(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        result = git_commit.invoke({"message": "", "cwd": str(repo)})
+        assert "error" in result
+        assert "non-empty" in result["error"]
+
+    def test_commit_subject_is_first_line(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "x\n")
+        _git(repo, "add", "a.txt")
+        result = git_commit.invoke({"message": "subject line\n\nbody paragraph", "cwd": str(repo)})
+        assert result["subject"] == "subject line"
+
+    def test_commit_not_a_repo_returns_error(self, tmp_path: Path) -> None:
+        result = git_commit.invoke({"message": "msg", "cwd": str(tmp_path)})
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# git_stash integration tests.
+# ---------------------------------------------------------------------------
+
+
+class TestGitStash:
+    def test_stash_with_changes(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "v1\n")
+        _commit(repo, "initial")
+        _write(repo, "a.txt", "v2\n")
+        result = git_stash.invoke({"cwd": str(repo)})
+        assert "error" not in result
+        assert result["stashed"] is True
+        # And the stash stack now has one entry.
+        stash_list = _git(repo, "stash", "list")
+        assert "stash@{0}" in stash_list
+
+    def test_stash_with_no_changes_reports_not_stashed(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "x\n")
+        _commit(repo, "initial")
+        result = git_stash.invoke({"cwd": str(repo)})
+        assert result["stashed"] is False
+
+    def test_stash_with_message(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "a.txt", "v1\n")
+        _commit(repo, "initial")
+        _write(repo, "a.txt", "v2\n")
+        result = git_stash.invoke({"message": "WIP feature x", "cwd": str(repo)})
+        assert result["stashed"] is True
+        assert result["message"] == "WIP feature x"
+        # Verify git recorded the message.
+        stash_list = _git(repo, "stash", "list")
+        assert "WIP feature x" in stash_list
+
+    def test_stash_includes_untracked(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write(repo, "tracked.txt", "x\n")
+        _commit(repo, "initial")
+        _write(repo, "untracked.txt", "u\n")
+        # Without -u, untracked files aren't stashed and the stash is a no-op.
+        no_u = git_stash.invoke({"cwd": str(repo)})
+        assert no_u["stashed"] is False
+        # With -u, the untracked file is stashed.
+        with_u = git_stash.invoke({"include_untracked": True, "cwd": str(repo)})
+        assert with_u["stashed"] is True
+
+    def test_stash_not_a_repo_returns_error(self, tmp_path: Path) -> None:
+        result = git_stash.invoke({"cwd": str(tmp_path)})
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
 # Tool registration.
 # ---------------------------------------------------------------------------
 
@@ -420,6 +561,9 @@ class TestToolRegistration:
             (git_diff, "git_diff"),
             (git_log, "git_log"),
             (git_blame, "git_blame"),
+            (git_add, "git_add"),
+            (git_commit, "git_commit"),
+            (git_stash, "git_stash"),
         ],
     )
     def test_is_langchain_tool(self, tool: object, expected_name: str) -> None:
@@ -429,4 +573,13 @@ class TestToolRegistration:
 
     def test_all_in_quoriv_tools(self) -> None:
         names = {t.name for t in QUORIV_TOOLS}
-        assert {"git_status", "git_diff", "git_log", "git_blame"} <= names
+        expected = {
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_blame",
+            "git_add",
+            "git_commit",
+            "git_stash",
+        }
+        assert expected <= names

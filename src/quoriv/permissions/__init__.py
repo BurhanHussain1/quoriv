@@ -17,8 +17,8 @@ DeepAgents' own mechanism.
 
 Modules:
     modes       4-mode -> ``interrupt_on`` dict translator. Defines
-                ``WRITE_TOOLS`` and ``SHELL_TOOLS`` frozensets and the
-                ``PermissionMode`` Literal type.
+                ``WRITE_TOOLS``, ``GIT_WRITE_TOOLS``, and ``SHELL_TOOLS``
+                frozensets and the ``PermissionMode`` Literal type.
     paths       ``PATH_PROTECTION`` — tuple of always-on deny rules for
                 ``.env*`` / ``.git/`` / ``.ssh/`` / ``secrets/``.
     guard       ``PathProtectionMiddleware`` — the actual enforcement
@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from quoriv.permissions.guard import PathProtectionMiddleware
 from quoriv.permissions.modes import (
+    GIT_WRITE_TOOLS,
     SHELL_TOOLS,
     WRITE_TOOLS,
     PermissionMode,
@@ -45,6 +46,7 @@ from quoriv.permissions.modes import (
 from quoriv.permissions.paths import PATH_PROTECTION
 
 __all__ = [
+    "GIT_WRITE_TOOLS",
     "PATH_PROTECTION",
     "SHELL_TOOLS",
     "WRITE_TOOLS",

@@ -41,6 +41,17 @@ These are the tools we gate behind ``interrupt_on`` in modes ``ask`` and
 """
 
 
+GIT_WRITE_TOOLS: Final[frozenset[str]] = frozenset({"git_add", "git_commit", "git_stash"})
+"""Names of Quoriv-specific git tools that mutate repo state.
+
+Gated alongside :data:`WRITE_TOOLS` in modes ``ask`` and ``read-only`` —
+they are state-changing in the same sense as ``write_file`` (they edit
+the working tree / index / commit graph), so the user-facing semantics
+match. ``auto`` mode lets them run silently like other filesystem
+writes; ``yolo`` lets everything through.
+"""
+
+
 SHELL_TOOLS: Final[frozenset[str]] = frozenset({"execute"})
 """Names of DeepAgents tools that execute shell commands.
 
@@ -65,14 +76,14 @@ def interrupt_on_for_mode(mode: PermissionMode) -> dict[str, bool | InterruptOnC
         >>> sorted(interrupt_on_for_mode("auto"))
         ['execute']
         >>> sorted(interrupt_on_for_mode("ask"))
-        ['edit_file', 'execute', 'write_file']
+        ['edit_file', 'execute', 'git_add', 'git_commit', 'git_stash', 'write_file']
     """
     if mode == "yolo":
         return {}
     if mode == "auto":
         return dict.fromkeys(SHELL_TOOLS, True)
-    # read-only and ask: prompt before every write and shell call.
-    return dict.fromkeys(WRITE_TOOLS | SHELL_TOOLS, True)
+    # read-only and ask: prompt before every write (fs or git) and shell call.
+    return dict.fromkeys(WRITE_TOOLS | GIT_WRITE_TOOLS | SHELL_TOOLS, True)
 
 
 def is_read_only(mode: PermissionMode) -> bool:

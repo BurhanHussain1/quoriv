@@ -14,8 +14,9 @@ Modules:
                 tree-sitter-based ``go_to_definition`` / ``find_references``
                 for ~30 languages.
     git         Slice 5 ships read-only ``git_status`` / ``git_diff`` /
-                ``git_log`` / ``git_blame``. Write ops (add/commit/stash)
-                land later behind ``interrupt_on=``.
+                ``git_log`` / ``git_blame``. Slice 5b adds
+                ``git_add`` / ``git_commit`` / ``git_stash``, gated by HITL
+                via :data:`quoriv.permissions.GIT_WRITE_TOOLS`.
     tests       (Slice 6) Language-aware test runner.
     web         (Phase 3) web_search and web_fetch.
 
@@ -32,16 +33,36 @@ What's **not** here, and why:
 from __future__ import annotations
 
 from quoriv.tools.ast_tools import find_symbol
-from quoriv.tools.git import git_blame, git_diff, git_log, git_status
+from quoriv.tools.git import (
+    git_add,
+    git_blame,
+    git_commit,
+    git_diff,
+    git_log,
+    git_stash,
+    git_status,
+)
 
-QUORIV_TOOLS = [find_symbol, git_status, git_diff, git_log, git_blame]
+QUORIV_TOOLS = [
+    find_symbol,
+    git_status,
+    git_diff,
+    git_log,
+    git_blame,
+    git_add,
+    git_commit,
+    git_stash,
+]
 """Default Quoriv-specific tools handed to ``create_deep_agent(tools=...)``."""
 
 __all__ = [
     "QUORIV_TOOLS",
     "find_symbol",
+    "git_add",
     "git_blame",
+    "git_commit",
     "git_diff",
     "git_log",
+    "git_stash",
     "git_status",
 ]

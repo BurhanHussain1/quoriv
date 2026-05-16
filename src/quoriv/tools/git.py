@@ -1,22 +1,29 @@
-"""Git tools — read-only git operations exposed to the agent.
+"""Git tools — read and write git operations exposed to the agent.
 
-Phase 1 Slice 5 ships four plain ``@tool`` callables:
+Phase 1 Slice 5 ships four read-only ``@tool`` callables:
 
     git_status   Branch, ahead/behind, and working-tree state.
     git_diff     Working-tree, staged, or revision-range unified diff.
     git_log      Commit history with sha / author / email / date / subject.
     git_blame    Per-line authorship for a file (or a range of lines).
 
+Phase 1 Slice 5b adds three write callables, each named in
+:data:`quoriv.permissions.GIT_WRITE_TOOLS` so the HITL approval UI
+prompts before they run (in ``ask`` / ``read-only`` modes):
+
+    git_add      Stage paths (or all changes) into the index.
+    git_commit   Create a commit from the current index.
+    git_stash    Push the working tree onto the stash stack.
+
 All tools shell out to ``git`` via :mod:`subprocess` with ``shell=False``
 and a list of args — there is no shell expansion of user-controlled
 input. Each tool returns a ``dict[str, Any]``; failure paths set an
 ``"error"`` key with a short human-readable message.
 
-Write operations (``git add``, ``git commit``, ``git stash``, ...) are
-intentionally **not** here. They land later behind ``interrupt_on=`` so
-HITL prompts before mutating the working tree. For now an agent that
-needs to mutate state can call the built-in ``execute`` shell tool
-(still gated by the session's permission mode).
+The write tools do **not** pass ``--no-gpg-sign`` or ``--no-verify``: they
+respect the user's local git config. Tests configure
+``commit.gpgsign=false`` per fixture repo so signing-required hosts do
+not block the suite.
 """
 
 from __future__ import annotations
@@ -322,3 +329,148 @@ def git_blame(
             }
         )
     return {"file": file, "entries": entries}
+
+
+# ---------------------------------------------------------------------------
+# Write tools (Slice 5b) — gated by HITL via GIT_WRITE_TOOLS.
+# ---------------------------------------------------------------------------
+
+
+def _staged_files(cwd: str) -> list[str]:
+    """Return the list of currently-staged paths (``git diff --cached --name-only``)."""
+    try:
+        rc, out, _err = _run_git(["diff", "--cached", "--name-only"], cwd)
+    except FileNotFoundError:
+        return []
+    if rc != 0:
+        return []
+    return [line for line in out.splitlines() if line]
+
+
+@tool
+def git_add(
+    paths: list[str] | None = None,
+    cwd: str = ".",
+) -> dict[str, Any]:
+    """Stage changes into the git index of the repo at ``cwd``.
+
+    Args:
+        paths: Specific paths (files or directories) to stage. If ``None``
+            or empty, runs ``git add -A`` to stage every change in the
+            working tree.
+        cwd: Path to (or inside) the repo.
+
+    Returns:
+        On success: ``{"staged_files": list[str]}`` — every path currently
+        in the index after the add (derived from
+        ``git diff --cached --name-only``). May be empty if nothing was
+        actually added.
+        On failure: ``{"error": "<message>"}``.
+    """
+    args: list[str] = ["add"]
+    if paths:
+        args.append("--")
+        args.extend(paths)
+    else:
+        args.append("-A")
+    try:
+        rc, out, err = _run_git(args, cwd)
+    except FileNotFoundError as exc:
+        return _git_unavailable_error(exc)
+    if rc != 0:
+        return _git_failure_error(rc, out, err, "git add")
+    return {"staged_files": _staged_files(cwd)}
+
+
+@tool
+def git_commit(message: str, cwd: str = ".") -> dict[str, Any]:
+    """Create a commit from the current index in the repo at ``cwd``.
+
+    Respects the user's local git config — does **not** override GPG
+    signing or pre-commit hooks. If signing is enabled and fails, the
+    underlying ``git commit`` call exits non-zero and the failure is
+    returned in ``"error"``.
+
+    Args:
+        message: Commit message. A single non-empty string; embedded
+            newlines are passed through to ``git commit -m`` unchanged.
+        cwd: Path to (or inside) the repo.
+
+    Returns:
+        On success::
+
+            {
+              "sha": str,         # 40-char commit SHA of the new commit
+              "short_sha": str,   # git's short SHA (typically 7+ chars)
+              "subject": str,     # first line of the commit message
+              "branch": str | None,  # current branch, or None on detached HEAD
+            }
+
+        On failure (including the "nothing to commit" case):
+            ``{"error": "<message>"}``.
+    """
+    if not message:
+        return {"error": "git_commit: message must be non-empty"}
+    try:
+        rc, out, err = _run_git(["commit", "-m", message], cwd)
+    except FileNotFoundError as exc:
+        return _git_unavailable_error(exc)
+    if rc != 0:
+        return _git_failure_error(rc, out, err, "git commit")
+
+    # Pull the freshly-created commit's metadata from git itself rather
+    # than parsing ``git commit``'s human-readable output (which varies
+    # by locale and git version).
+    try:
+        _rc_sha, sha_out, _err_sha = _run_git(["rev-parse", "HEAD"], cwd)
+        _rc_short, short_out, _err_short = _run_git(["rev-parse", "--short", "HEAD"], cwd)
+        _rc_subj, subj_out, _err_subj = _run_git(["log", "-1", "--pretty=%s", "HEAD"], cwd)
+        _rc_br, br_out, _err_br = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    except FileNotFoundError as exc:
+        return _git_unavailable_error(exc)
+    branch_name = br_out.strip()
+    return {
+        "sha": sha_out.strip(),
+        "short_sha": short_out.strip(),
+        "subject": subj_out.strip(),
+        "branch": branch_name if branch_name and branch_name != "HEAD" else None,
+    }
+
+
+@tool
+def git_stash(
+    message: str | None = None,
+    include_untracked: bool = False,
+    cwd: str = ".",
+) -> dict[str, Any]:
+    """Push the working tree onto the stash stack in the repo at ``cwd``.
+
+    Args:
+        message: Optional stash message (``git stash push -m <message>``).
+        include_untracked: If True, also stash untracked files (``-u``).
+        cwd: Path to (or inside) the repo.
+
+    Returns:
+        On success::
+
+            {
+              "stashed": bool,        # False when there were no changes to stash
+              "message": str | None,  # echoed back when provided
+            }
+
+        On failure: ``{"error": "<message>"}``.
+    """
+    args: list[str] = ["stash", "push"]
+    if include_untracked:
+        args.append("-u")
+    if message:
+        args.extend(["-m", message])
+    try:
+        rc, out, err = _run_git(args, cwd)
+    except FileNotFoundError as exc:
+        return _git_unavailable_error(exc)
+    if rc != 0:
+        return _git_failure_error(rc, out, err, "git stash")
+    # git stash exits 0 even when there's nothing to save — detect that.
+    stashed = "No local changes to save" not in out
+    return {"stashed": stashed, "message": message}
