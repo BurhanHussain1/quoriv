@@ -329,6 +329,17 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 520 → 526** (+6). All gates green.
 
+#### Phase 1 Slice 9b — End-to-end stubbed-LLM turn test
+- `tests/integration/test_e2e_stubbed_chat.py` — first integration test: drives a full user turn through `quoriv.app._drive_turn` against a real `build_agent`-compiled DeepAgent whose model is a `_StubChatModel` (a `langchain_core.language_models.fake_chat_models.GenericFakeChatModel` subclass with `bind_tools` short-circuited to `self`, since the base class raises `NotImplementedError` and DeepAgents binds tools at compile time). `quoriv.core.agent.get_model` is monkeypatched to return the stub, so the test exercises the same code path the CLI uses — including the LangGraph event stream, the `StreamRenderer` `Live`, the `TraceLogger` writes, the `MemorySaver` checkpointer, and the `PathProtectionMiddleware`. Mode is `yolo` to skip HITL interrupts so the agent finishes in one model turn.
+- 4 tests in `TestEndToEndTurn`:
+  - `test_drive_turn_writes_turn_start_and_end` — verifies the trace bracket: first record is `turn_start` with the original `thread_id`/`user_input`/`mode`, last record is `turn_end` with the matching `thread_id`. That bracket is the contract `/cost` and any future observability tooling depend on.
+  - `test_drive_turn_records_model_complete` — verifies at least one `model_complete` record lands per turn (one stub `AIMessage` → one `on_chat_model_end` → one trace entry).
+  - `test_drive_turn_renders_stub_response` — sanity that the LLM payload is actually rendered to the console buffer through `StreamRenderer`, not just traced.
+  - `test_status_line_built_from_session_context` — `_build_status_line(model_id, mode, cwd, thread_id)` is unaffected by a completed turn and still returns a well-formed string with the expected fields, mode marker, truncated thread id, and three separators.
+- Catches future regressions where `_drive_turn` / `_stream_events` / `TraceLogger` drift out of sync — a renamed LangGraph event key, a missing tracer call, or a status-line format change all surface here instead of in production.
+
+**Test count: 526 → 530** (+4). All gates green. With Slice 9b done, Phase 1 is complete.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -344,8 +355,8 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 1 — remaining slices)
-- **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
+### Coming next (Phase 2 — kickoff)
+- Phase 1 is complete. Phase 2 scoping starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ---
 
