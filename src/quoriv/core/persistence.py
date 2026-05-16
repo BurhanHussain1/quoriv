@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 QUORIV_DIRNAME = ".quoriv"
 SESSIONS_DB_NAME = "sessions.db"
 SESSIONS_REGISTRY_NAME = "sessions.json"
+TRACES_DIRNAME = "traces"
 _REGISTRY_VERSION = 1
 
 
@@ -55,6 +56,21 @@ def db_path(cwd: Path) -> Path:
 def registry_path(cwd: Path) -> Path:
     """Return the named-session sidecar JSON path for ``cwd``."""
     return quoriv_dir(cwd) / SESSIONS_REGISTRY_NAME
+
+
+def traces_dir(cwd: Path) -> Path:
+    """Return the directory holding per-thread JSONL trace logs (Slice 9)."""
+    return quoriv_dir(cwd) / TRACES_DIRNAME
+
+
+def trace_path(cwd: Path, thread_id: str) -> Path:
+    """Return the JSONL trace file for ``thread_id`` rooted at ``cwd``.
+
+    Path shape: ``<cwd>/.quoriv/traces/<thread_id>.jsonl``. The file is
+    not created here — :class:`quoriv.observability.TraceLogger` creates
+    it lazily on first write.
+    """
+    return traces_dir(cwd) / f"{thread_id}.jsonl"
 
 
 def ensure_quoriv_dir(cwd: Path) -> Path:

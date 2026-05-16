@@ -40,6 +40,8 @@ from quoriv.core.persistence import (
     ensure_quoriv_dir,
     quoriv_dir,
     registry_path,
+    trace_path,
+    traces_dir,
 )
 
 __all__ = [
@@ -53,4 +55,6 @@ __all__ = [
     "render_token",
     "render_tool_end",
     "render_tool_start",
+    "trace_path",
+    "traces_dir",
 ]

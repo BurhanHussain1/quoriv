@@ -230,6 +230,18 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 350 → 360** (+10). All gates green.
 
+#### Phase 1 Slice 9 — Local JSONL trace log + token-aware `/cost`
+- `quoriv.observability.trace` — new module with `TraceLogger`. Append-only JSONL writer per chat thread; lazy file creation (no on-disk artifact until first write); `_sanitize()` recursively coerces non-JSON-native values (Path, dataclasses, sets, arbitrary objects via `str()`) so unserializable values never raise. Public API: `path` property, `log(event, **fields)`, `read_events()`, `token_totals()`. `read_events()` tolerates corrupt lines and non-dict JSON values (skipped silently — a single bad line never poisons the log). `token_totals()` sums across every `model_complete` event with sensible fallback (`input + output` when `total_tokens` is absent).
+- `quoriv.core.persistence` — new `trace_path(cwd, thread_id)` and `traces_dir(cwd)` helpers, both re-exported from `quoriv.core`. Canonical location: `<cwd>/.quoriv/traces/<thread_id>.jsonl`. Mirrors the `db_path` / `registry_path` pattern from Slice 7.
+- `quoriv.app` — `_interactive_loop` now owns a `TraceLogger`. The logger rotates alongside `thread_id` when `/clear` / `/load` / `/resume` switch threads (old log file remains on disk so a future `/load` can return to it and see its history). `_drive_turn` brackets the turn with `turn_start` / `turn_end` events; `_stream_events` records `model_complete` (with `input_tokens` / `output_tokens` / `total_tokens` extracted from the final `AIMessage.usage_metadata` when LangChain provides it), `tool_start` (with args), and `tool_end` (with output preview, truncated at 500 chars).
+- `/cost` is no longer a stub — it reads `tracer.token_totals()` for the active thread and prints aligned counts plus the trace file path. Surface still notes that per-provider dollar-cost calculation is deferred (waiting on a rate table).
+- `_handle_slash` gained a keyword-only `tracer: TraceLogger | None = None` parameter, defaulted so existing test calls without a tracer still type-check. When `None`, `/cost` falls back to a "no logger attached" message.
+- 28 new tests:
+  - `tests/unit/observability/test_trace.py` (24): `TestSanitize` (7) — primitives passthrough, dict recursion, Path coercion, dataclasses, sets/tuples, fallback to `str()`, non-string dict keys. `TestTraceLoggerWrites` (7) — `.path` property, lazy file creation, parent-dir auto-creation, JSONL append, ISO-8601 UTC timestamps, supplied fields preserved, unserializable values sanitized. `TestTraceLoggerReads` (4) — missing-file empty list, round trip, malformed-line resilience, non-dict JSON skipped. `TestTokenTotals` (5) — empty log zeros, multi-event sum, `total_tokens` fallback from `input + output`, ignores non-`model_complete` events, ignores non-int token fields. `TestTracePathIntegration` (2) — canonical filesystem location, round-trip through a fresh logger instance.
+  - `tests/unit/test_app_slash.py` (4) — `TestCostCommand` rewritten: no-tracer reports "No trace logger"; empty log reports zero calls + trace file path; populated log shows token totals (input/output/total/calls); trace file path always surfaced.
+
+**Test count: 360 → 388** (+28). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -249,7 +261,8 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - **Slice 4b:** Tree-sitter expansion — multi-language parser registry, symbol index, `go_to_definition`, `find_references` for ~30 languages
 - **Slice 6b:** Per-runner output parsing — extract `{passed, failed, errors, skipped, duration}` from each runner's terminal summary so the LLM gets counts without scanning stdout
 - **Slice 8b:** Live `/mode` switch (rebuild compiled agent in place) and `/memory` reload — currently `/mode` only displays and `quoriv chat --mode <name>` is the only switch path
-- **Slice 9:** Local JSON trace log + integration tests (also unblocks real `/cost` numbers)
+- **Slice 9b:** End-to-end integration test against a stubbed LLM (drive a full turn through the agent + trace log + status line) — deferred from Slice 9
+- **Slice 9c:** Per-provider dollar-cost rate table feeding `/cost` (currently shows token counts only)
 
 ---
 

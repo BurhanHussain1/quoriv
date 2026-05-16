@@ -15,8 +15,14 @@ Wiring summary:
       ``/load``, and ``/resume`` slash commands.
     * Slice 8: persistent bottom status line (``model | mode | cwd |
       thread``) and four new read-only slash commands — ``/tools``,
-      ``/memory``, ``/mode``, ``/cost``. ``/cost`` is a stub pending the
-      Slice 9 trace log; the other three introspect live session state.
+      ``/memory``, ``/mode``, ``/cost``. ``/cost`` is wired to the Slice
+      9 trace log; the other three introspect live session state.
+    * Slice 9: per-thread JSONL trace log via
+      :class:`quoriv.observability.TraceLogger`. ``_drive_turn`` records
+      ``turn_start`` / ``turn_end`` and ``_stream_events`` records
+      ``model_complete`` (with token usage when LangChain provides it),
+      ``tool_start``, and ``tool_end``. ``/cost`` reads the active
+      thread's log for token totals.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from prompt_toolkit import PromptSession
@@ -41,8 +47,10 @@ from quoriv.core import (
     ensure_quoriv_dir,
     render_tool_end,
     render_tool_start,
+    trace_path,
 )
 from quoriv.models import MissingAPIKeyError
+from quoriv.observability import TraceLogger
 from quoriv.permissions import PermissionMode, interrupt_on_for_mode, is_read_only
 from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
@@ -176,6 +184,7 @@ async def _interactive_loop(
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits."""
     thread_id = _new_thread_id()
+    tracer = TraceLogger(trace_path(cwd, thread_id))
 
     def _toolbar() -> str:
         # Closure reads the latest ``thread_id`` because Python closures
@@ -209,15 +218,27 @@ async def _interactive_loop(
                 model_id=model_id,
                 cwd=cwd,
                 mode=permission_mode,
+                tracer=tracer,
             )
             if command_result.exit:
                 return
             if command_result.new_thread_id is not None:
                 thread_id = command_result.new_thread_id
+                # New thread → new trace file. The old logger is dropped;
+                # its file remains on disk for ``/cost`` against the prior
+                # thread (loadable via ``/load <name>`` later).
+                tracer = TraceLogger(trace_path(cwd, thread_id))
             continue
 
         try:
-            await _drive_turn(console, agent, user_input, thread_id, permission_mode)
+            await _drive_turn(
+                console,
+                agent,
+                user_input,
+                thread_id,
+                permission_mode,
+                tracer=tracer,
+            )
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
             continue
@@ -300,13 +321,15 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
     model_id: str = "(unset)",
     cwd: Path | None = None,
     mode: PermissionMode = "ask",
+    tracer: TraceLogger | None = None,
 ) -> _SlashResult:
     """Dispatch a slash command and return what the caller should do next.
 
-    The keyword-only context parameters (``model_id``, ``cwd``, ``mode``)
-    feed the Slice 8 introspection commands (``/tools`` / ``/memory`` /
-    ``/mode``). They carry safe defaults so legacy call sites and tests
-    that pre-date Slice 8 still work without modification.
+    The keyword-only context parameters (``model_id``, ``cwd``, ``mode``,
+    ``tracer``) feed the Slice 8 + Slice 9 introspection commands
+    (``/tools`` / ``/memory`` / ``/mode`` / ``/cost``). They carry safe
+    defaults so legacy call sites and tests that pre-date these slices
+    still work without modification.
     """
     parts = raw.split(maxsplit=1)
     cmd = parts[0].lower()
@@ -349,7 +372,7 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
         return _handle_mode(console, mode)
 
     if cmd == "/cost":
-        return _handle_cost(console)
+        return _handle_cost(console, tracer)
 
     console.print(f"[red]Unknown command:[/red] {cmd}  (try [cyan]/help[/cyan])")
     return _SlashResult()
@@ -423,12 +446,29 @@ def _handle_mode(console: Console, mode: PermissionMode) -> _SlashResult:
     return _SlashResult()
 
 
-def _handle_cost(console: Console) -> _SlashResult:
-    """Stub the future cost-tracking surface (lands in Slice 9)."""
+def _handle_cost(console: Console, tracer: TraceLogger | None) -> _SlashResult:
+    """Show token totals for the active thread, read from the trace log."""
     console.print()
-    console.print("[dim]Token tracking is not yet wired.[/dim]")
-    console.print("[dim]Slice 9 adds a local JSON trace log that records per-turn[/dim]")
-    console.print("[dim]token usage and surfaces it here.[/dim]")
+    if tracer is None:
+        # Called outside a chat loop (e.g., from a test) — nothing to read.
+        console.print("[dim]No trace logger attached to this session.[/dim]")
+        console.print()
+        return _SlashResult()
+    totals = tracer.token_totals()
+    if totals["model_calls"] == 0:
+        console.print(
+            "[dim]No model calls recorded for this thread yet. Send a message first.[/dim]"
+        )
+        console.print(f"[dim]Trace file: {tracer.path}[/dim]")
+        console.print()
+        return _SlashResult()
+    console.print("[bold]Token usage (this thread)[/bold]")
+    console.print(f"  Input:  [cyan]{totals['input_tokens']:>8}[/cyan]")
+    console.print(f"  Output: [cyan]{totals['output_tokens']:>8}[/cyan]")
+    console.print(f"  Total:  [cyan]{totals['total_tokens']:>8}[/cyan]")
+    console.print(f"  Calls:  [cyan]{totals['model_calls']:>8}[/cyan]")
+    console.print(f"[dim]Trace file: {tracer.path}[/dim]")
+    console.print("[dim]Dollar cost calc (per-provider rate table) lands in a later slice.[/dim]")
     console.print()
     return _SlashResult()
 
@@ -515,6 +555,8 @@ async def _drive_turn(
     user_input: str,
     thread_id: str,
     mode: PermissionMode,
+    *,
+    tracer: TraceLogger | None = None,
 ) -> None:
     """Drive one full user turn end-to-end, handling HITL interrupts.
 
@@ -525,22 +567,32 @@ async def _drive_turn(
         3. If yes, render an approval prompt for each pending action and
            resume the graph with the user's decisions.
         4. Repeat until the agent has no more pending interrupts.
+
+    When ``tracer`` is supplied, the turn is bracketed with
+    ``turn_start`` / ``turn_end`` events in the JSONL trace log.
     """
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     next_input: Any = {"messages": [HumanMessage(content=user_input)]}
     auto_deny = is_read_only(mode)
 
-    while True:
-        console.print()
-        await _stream_events(console, agent, next_input, run_config)
-        console.print()
+    if tracer is not None:
+        tracer.log("turn_start", thread_id=thread_id, user_input=user_input, mode=mode)
 
-        hitl_request = await _pending_hitl_request(agent, run_config)
-        if hitl_request is None:
-            return
+    try:
+        while True:
+            console.print()
+            await _stream_events(console, agent, next_input, run_config, tracer=tracer)
+            console.print()
 
-        decisions = await _collect_decisions(console, hitl_request, auto_deny=auto_deny)
-        next_input = Command(resume={"decisions": decisions})
+            hitl_request = await _pending_hitl_request(agent, run_config)
+            if hitl_request is None:
+                return
+
+            decisions = await _collect_decisions(console, hitl_request, auto_deny=auto_deny)
+            next_input = Command(resume={"decisions": decisions})
+    finally:
+        if tracer is not None:
+            tracer.log("turn_end", thread_id=thread_id)
 
 
 async def _stream_events(
@@ -548,6 +600,8 @@ async def _stream_events(
     agent: Any,
     input_payload: Any,
     run_config: RunnableConfig,
+    *,
+    tracer: TraceLogger | None = None,
 ) -> None:
     """Pump the agent's event stream into the UI.
 
@@ -555,6 +609,10 @@ async def _stream_events(
     Rich ``Live``). Tool calls render separately — ``edit_file`` gets a
     colored unified diff via :func:`render_edit_diff`; other tools use
     the generic header line.
+
+    When ``tracer`` is supplied, ``model_complete`` (with token usage
+    when LangChain provides it), ``tool_start``, and ``tool_end`` events
+    are recorded.
     """
     renderer = StreamRenderer(console)
     try:
@@ -572,12 +630,16 @@ async def _stream_events(
 
             if kind == "on_chat_model_end":
                 renderer.finalize()
+                if tracer is not None:
+                    _trace_model_complete(tracer, event)
                 continue
 
             if kind == "on_tool_start":
                 renderer.finalize()
                 name = event.get("name", "?")
                 tool_args = data.get("input", {})
+                if tracer is not None:
+                    tracer.log("tool_start", tool_name=name, args=tool_args)
                 if name == "edit_file" and isinstance(tool_args, dict):
                     render_edit_diff(
                         console,
@@ -590,10 +652,52 @@ async def _stream_events(
                 continue
 
             if kind == "on_tool_end":
-                render_tool_end(console, data.get("output"))
+                output = data.get("output")
+                if tracer is not None:
+                    tracer.log(
+                        "tool_end",
+                        tool_name=event.get("name", "?"),
+                        output_preview=_preview(output),
+                    )
+                render_tool_end(console, output)
                 continue
     finally:
         renderer.finalize()
+
+
+_OUTPUT_PREVIEW_LIMIT = 500
+
+
+def _preview(value: Any) -> str:
+    """Render a short, safe preview of a tool's output for the trace log."""
+    text = str(value)
+    if len(text) > _OUTPUT_PREVIEW_LIMIT:
+        return text[:_OUTPUT_PREVIEW_LIMIT] + f"… (+{len(text) - _OUTPUT_PREVIEW_LIMIT} chars)"
+    return text
+
+
+def _trace_model_complete(tracer: TraceLogger, event: dict[str, Any]) -> None:
+    """Extract token usage from an ``on_chat_model_end`` event and log it.
+
+    LangChain places token counts on the final message's ``usage_metadata``
+    field (``{"input_tokens", "output_tokens", "total_tokens"}``). Some
+    providers omit it — we record whatever is available without
+    erroring.
+    """
+    data = event.get("data", {})
+    output = data.get("output")
+    metadata = event.get("metadata") or {}
+    model_name = event.get("name") or metadata.get("ls_model_name")
+    fields: dict[str, Any] = {"model": model_name}
+    usage = None
+    if isinstance(output, AIMessage):
+        usage = getattr(output, "usage_metadata", None)
+    if isinstance(usage, dict):
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                fields[key] = value
+    tracer.log("model_complete", **fields)
 
 
 async def _pending_hitl_request(

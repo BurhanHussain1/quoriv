@@ -20,7 +20,8 @@ from quoriv.app import (
     _build_status_line,
     _handle_slash,
 )
-from quoriv.core import SessionRegistry
+from quoriv.core import SessionRegistry, trace_path
+from quoriv.observability import TraceLogger
 
 
 def _make_console() -> tuple[Console, StringIO]:
@@ -271,14 +272,43 @@ class TestModeCommand:
 
 
 class TestCostCommand:
-    def test_is_a_stub(self, tmp_path: Path) -> None:
+    def test_no_tracer_reports_disconnected(self, tmp_path: Path) -> None:
+        # No tracer attached -> falls back to a "no logger" message.
         console, buf = _make_console()
         result = _handle_slash(console, "/cost", "current", _registry(tmp_path))
         assert result.exit is False
         assert result.new_thread_id is None
         output = buf.getvalue()
-        assert "Token tracking is not yet wired" in output
-        assert "Slice 9" in output
+        assert "No trace logger" in output
+
+    def test_empty_log_reports_zero_calls(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        console, buf = _make_console()
+        _handle_slash(console, "/cost", "thread-1", _registry(tmp_path), tracer=tracer)
+        output = buf.getvalue()
+        assert "No model calls recorded" in output
+        # The trace file path should appear so the user can find it.
+        assert ".jsonl" in output
+
+    def test_populated_log_shows_totals(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=100, output_tokens=200, total_tokens=300)
+        tracer.log("model_complete", input_tokens=50, output_tokens=75, total_tokens=125)
+        console, buf = _make_console()
+        _handle_slash(console, "/cost", "thread-1", _registry(tmp_path), tracer=tracer)
+        output = buf.getvalue()
+        assert "Token usage" in output
+        assert "150" in output  # input total
+        assert "275" in output  # output total
+        assert "425" in output  # total tokens
+        assert "Calls" in output
+
+    def test_includes_trace_path(self, tmp_path: Path) -> None:
+        tracer = TraceLogger(trace_path(tmp_path, "thread-1"))
+        tracer.log("model_complete", input_tokens=10, output_tokens=20)
+        console, buf = _make_console()
+        _handle_slash(console, "/cost", "thread-1", _registry(tmp_path), tracer=tracer)
+        assert "Trace file" in buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
