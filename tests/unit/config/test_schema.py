@@ -10,6 +10,7 @@ from quoriv.config.schema import (
     CostRate,
     ModelConfig,
     PermissionsConfig,
+    PluginsConfig,
     QuorivConfig,
     ToolsConfig,
     UIConfig,
@@ -180,3 +181,29 @@ class TestCostConfig:
         assert config.cost.rates["openai:gpt-4o"].input_per_1k == 0.0030
         assert config.cost.rates["openai:gpt-4o"].output_per_1k == 0.0120
         assert config.cost.rates["ollama:"].input_per_1k == 0.0
+
+
+# ---------------------------------------------------------------------------
+# PluginsConfig — Phase 2 Slice 5
+# ---------------------------------------------------------------------------
+
+
+class TestPluginsConfig:
+    def test_defaults_to_empty_disabled_list(self) -> None:
+        assert PluginsConfig().disabled == []
+
+    def test_quoriv_config_exposes_plugins_section(self) -> None:
+        config = QuorivConfig.model_validate({})
+        assert config.plugins.disabled == []
+
+    def test_disabled_list_accepted(self) -> None:
+        config = PluginsConfig.model_validate({"disabled": ["noisy_plugin", "slow_one"]})
+        assert config.disabled == ["noisy_plugin", "slow_one"]
+
+    def test_extra_field_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            PluginsConfig.model_validate({"disabled": [], "extras": "nope"})
+
+    def test_quoriv_config_round_trip_with_plugins(self) -> None:
+        config = QuorivConfig.model_validate({"plugins": {"disabled": ["heavy_metal"]}})
+        assert config.plugins.disabled == ["heavy_metal"]

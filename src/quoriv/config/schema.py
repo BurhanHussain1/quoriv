@@ -154,6 +154,30 @@ class SubAgentRoleConfig(BaseModel):
     )
 
 
+class PluginsConfig(BaseModel):
+    """Third-party plugin enable/disable — Phase 2 Slice 5.
+
+    Plugins register tools via the ``quoriv.plugins`` setuptools
+    entry-point group. The loader (:mod:`quoriv.plugins.loader`)
+    discovers them at session start and merges the returned tools
+    into the agent's ``tools=`` list.
+
+    ``disabled`` lets a user opt a specific plugin out without
+    uninstalling the package — useful when a noisy plugin is
+    interfering with the current workflow.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    disabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of plugins to skip. Match the entry-point name "
+            "registered under the 'quoriv.plugins' group."
+        ),
+    )
+
+
 class SubAgentsConfig(BaseModel):
     """Built-in subagent roles — researcher / debugger / reviewer.
 
@@ -201,3 +225,4 @@ class QuorivConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     cost: CostConfig = Field(default_factory=CostConfig)
     subagents: SubAgentsConfig = Field(default_factory=SubAgentsConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)

@@ -396,6 +396,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 576 → 592** (+16). All gates green.
 
+#### Phase 2 Slice 5 — Python plugin API (entry-point loader)
+- `quoriv.plugins.loader` — new module. Third-party packages register tools by declaring an entry point under the `quoriv.plugins` group (`[project.entry-points."quoriv.plugins"]` in their `pyproject.toml`). The named callable takes no arguments and returns an iterable of LangChain `BaseTool` instances. `discover_plugin_tools(disabled=...)` is called from `build_agent` at session start and merges the returned tools after `QUORIV_TOOLS` into `create_deep_agent(tools=...)`. `list_plugins()` exposes a `PluginRecord` per entry point (name, target, captured tool names, load error) for introspection.
+- Defensive on purpose: an entry point that fails to import, a factory that raises, a non-iterable return, or a mixed list with non-tool items each logs a `loguru` warning and is dropped rather than failing the session. Users should be able to start a chat even if one plugin's tree is currently broken.
+- `quoriv.config.schema.PluginsConfig` (`disabled: list[str]`, `extra="forbid"`) added to `QuorivConfig`. Lets a user opt a specific plugin out without uninstalling its package — match by entry-point name.
+- `quoriv.core.agent.build_agent` calls `discover_plugin_tools(disabled=config.plugins.disabled)` and merges the result after `QUORIV_TOOLS` before handing the list to `create_deep_agent(tools=...)`.
+- `config.example.toml` documents the new `[plugins]` block with a worked example showing the `pyproject.toml` snippet a plugin author writes.
+- 19 new tests:
+  - `tests/unit/plugins/test_loader.py::TestDiscoverPluginTools` (4) — empty registry → empty list; one plugin → one tool; tools from multiple plugins merge; generator-returning factory normalises to a list.
+  - `tests/unit/plugins/test_loader.py::TestDisabledFiltering` (3) — disabled list filters by entry-point name; `disabled` accepts any iterable (set works); empty disabled loads everything.
+  - `tests/unit/plugins/test_loader.py::TestDefensiveLoading` (4) — import error → working plugin still loads; factory raising → working plugin still loads; non-iterable return → silently dropped; mixed valid+invalid items → valid kept.
+  - `tests/unit/plugins/test_loader.py::TestListPlugins` (3) — one record per entry point; load failure captured with `error` string; factory failure captured with `error` string.
+  - `tests/unit/config/test_schema.py::TestPluginsConfig` (5) — empty default; `QuorivConfig.plugins.disabled == []` on empty input; explicit disabled list round-trips; `extra="forbid"`; full round-trip through `QuorivConfig.model_validate`.
+
+**Test count: 592 → 611** (+19). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -412,7 +427,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 2 — remaining slices)
-- **Python plugin API:** setuptools entry points (`quoriv.plugins`) merged into the agent's `tools=`
 - **MCP client:** `quoriv.plugins.mcp` over stdio + SSE transports
 
 ---

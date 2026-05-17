@@ -41,6 +41,7 @@ from quoriv.permissions import (
     PermissionMode,
     interrupt_on_for_mode,
 )
+from quoriv.plugins import discover_plugin_tools
 from quoriv.tools import QUORIV_TOOLS
 
 if TYPE_CHECKING:
@@ -99,11 +100,16 @@ def build_agent(
     # ``task`` tool. Each role's model is resolved from the
     # ``[subagents.*]`` block in config.
     subagents = build_subagents(config)
+    # Phase 2 Slice 5: discover third-party tools registered via the
+    # ``quoriv.plugins`` entry-point group and merge them after
+    # ``QUORIV_TOOLS``. Disabled plugins are skipped. Broken plugins
+    # are logged and dropped — they never break a session.
+    plugin_tools = discover_plugin_tools(disabled=config.plugins.disabled)
 
     return create_deep_agent(
         model=model,
         backend=backend,
-        tools=list(QUORIV_TOOLS),
+        tools=[*QUORIV_TOOLS, *plugin_tools],
         middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))],
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,

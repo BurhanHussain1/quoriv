@@ -50,6 +50,29 @@ theme = "dark"
 disabled = []
 
 
+# [plugins]
+# Phase 2 Slice 5: third-party tool plugins. A plugin is a Python
+# package that registers an entry point under the `quoriv.plugins`
+# group. The loader (quoriv.plugins.loader.discover_plugin_tools)
+# walks every registered entry point at session start and merges the
+# returned tools into the agent's tools= list.
+#
+# To author a plugin, add this to your package's pyproject.toml:
+#
+#   [project.entry-points."quoriv.plugins"]
+#   my_plugin = "my_pkg:plugin_factory"
+#
+# where `plugin_factory` is a no-argument callable returning an
+# iterable of LangChain BaseTool instances (typically @tool-decorated
+# functions).
+#
+# Use `disabled` here to skip a plugin without uninstalling its
+# package — useful when a noisy plugin is interfering with the
+# current workflow. Names match the entry-point name.
+#
+# disabled = ["plugin_name_1", "plugin_name_2"]
+
+
 # [subagents]
 # Phase 2 Slice 4: per-task model routing for Quoriv's built-in
 # subagents. Three roles ship out of the box, each routed to one of
