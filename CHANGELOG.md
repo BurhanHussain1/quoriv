@@ -340,6 +340,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 526 → 530** (+4). All gates green. With Slice 9b done, Phase 1 is complete.
 
+#### Phase 2 Slice 1 — Memory wiring
+- `quoriv.core.memory` — new module: `MemoryCandidate` NamedTuple (`label`, `path`), `memory_candidates(cwd)` returning the ordered list of two candidates (global first as `~/.quoriv/memory.md`, project second as `<cwd>/PROJECT.md`), and `resolve_memory_files(cwd)` filtering to ones that exist via `Path.is_file()` (so a directory named `PROJECT.md` is correctly rejected). The order matters: DeepAgents concatenates the list in load order under `<agent_memory>` in the system prompt, so global-then-project lets a project file refine a global note — same precedence rule the TOML loader uses.
+- `quoriv.core.agent.build_agent` now calls `resolve_memory_files(root)`, converts to strings, and passes the result to `create_deep_agent(memory=...)`. When the resolved list is empty, the argument is `None` — DeepAgents documents `None` (not `[]`) as the contract for "don't attach the middleware", so we honor that.
+- `quoriv.core.__init__` re-exports `MemoryCandidate`, `memory_candidates`, `resolve_memory_files`.
+- `quoriv.app._handle_memory` rewritten to source its candidate list from `memory_candidates(cwd)` rather than hardcoded paths. Each present file now gains a `(loaded)` tag, making it clear the agent's `MemoryMiddleware` has actually seen the file — not just that it exists on disk.
+- `quoriv.app._render_welcome` adds a `Memory: PROJECT.md, memory.md` line to the welcome panel when at least one file is loaded; silent when neither exists so first-time users don't see clutter.
+- 19 new tests:
+  - `tests/unit/core/test_memory.py` (10): `TestMemoryCandidates` (5) — load-order, global path uses fake_home/.quoriv, project path tracks the supplied cwd, NamedTuple round-trip, different cwds yield different project paths. `TestResolveMemoryFiles` (5) — neither / project-only / global-only / both / directory-with-the-name rejected.
+  - `tests/unit/core/test_agent.py::TestBuildAgentMemoryWiring` (4) — monkeypatched `create_deep_agent` captures kwargs and verifies `memory=None` when no files, `memory=[...PROJECT.md]` when only project file present, `memory=[...memory.md]` when only global, and global-then-project ordering when both exist.
+  - `tests/unit/test_app_slash.py::TestMemoryCommand` (2 new) — `(loaded)` tag appears next to present files; absent files do not show the tag. The two pre-existing `/memory` tests gained the `fake_home` fixture so a developer's real `~/.quoriv/memory.md` doesn't leak into the assertion.
+  - `tests/unit/test_app_slash.py::TestWelcomePanel` (3) — no memory line when neither file present; PROJECT.md surfaces in the panel; global memory.md surfaces.
+
+**Test count: 530 → 549** (+19). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -355,8 +369,12 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 2 — kickoff)
-- Phase 1 is complete. Phase 2 scoping starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+### Coming next (Phase 2 — remaining slices)
+- **`quoriv init`:** scaffold a starter `PROJECT.md` (small follow-up to Slice 1)
+- **"Always allow" allowlist:** UX layer on top of `interrupt_on` — promote a one-time approval to permanent for the session
+- **Per-task model routing:** built-in subagents (researcher / debugger / reviewer) each with their own `model=`, configurable in TOML
+- **Python plugin API:** setuptools entry points (`quoriv.plugins`) merged into the agent's `tools=`
+- **MCP client:** `quoriv.plugins.mcp` over stdio + SSE transports
 
 ---
 

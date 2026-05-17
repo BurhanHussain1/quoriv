@@ -33,6 +33,11 @@ from __future__ import annotations
 
 from quoriv.core.agent import build_agent
 from quoriv.core.events import render_token, render_tool_end, render_tool_start
+from quoriv.core.memory import (
+    MemoryCandidate,
+    memory_candidates,
+    resolve_memory_files,
+)
 from quoriv.core.persistence import (
     NamedSession,
     SessionRegistry,
@@ -45,16 +50,19 @@ from quoriv.core.persistence import (
 )
 
 __all__ = [
+    "MemoryCandidate",
     "NamedSession",
     "SessionRegistry",
     "build_agent",
     "db_path",
     "ensure_quoriv_dir",
+    "memory_candidates",
     "quoriv_dir",
     "registry_path",
     "render_token",
     "render_tool_end",
     "render_tool_start",
+    "resolve_memory_files",
     "trace_path",
     "traces_dir",
 ]

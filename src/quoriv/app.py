@@ -45,8 +45,10 @@ from quoriv.core import (
     build_agent,
     db_path,
     ensure_quoriv_dir,
+    memory_candidates,
     render_tool_end,
     render_tool_start,
+    resolve_memory_files,
     trace_path,
 )
 from quoriv.models import MissingAPIKeyError
@@ -321,6 +323,14 @@ def _render_welcome(
     cwd: Path | None,
 ) -> None:
     cwd_display = str(cwd) if cwd is not None else "(current directory)"
+    # Phase 2 Slice 1: surface the memory files the agent has actually
+    # loaded — silent when none exist, so users without a PROJECT.md
+    # don't see a clutter line.
+    loaded = resolve_memory_files(cwd if cwd is not None else Path.cwd())
+    memory_line = ""
+    if loaded:
+        names = ", ".join(p.name for p in loaded)
+        memory_line = f"Memory: [cyan]{names}[/cyan]\n"
     console.print(
         Panel.fit(
             (
@@ -328,6 +338,7 @@ def _render_welcome(
                 f"Model: [cyan]{model_id}[/cyan]\n"
                 f"Mode:  [cyan]{mode}[/cyan]\n"
                 f"Root:  [cyan]{cwd_display}[/cyan]\n"
+                f"{memory_line}"
                 f"Type [yellow]/help[/yellow] for commands, [yellow]/exit[/yellow] to quit."
             ),
             title="welcome",
@@ -461,23 +472,31 @@ def _handle_tools(console: Console) -> _SlashResult:
 
 
 def _handle_memory(console: Console, cwd: Path) -> _SlashResult:
-    """Show the status of memory files the agent would load."""
-    paths: list[tuple[str, Path]] = [
-        ("global", Path.home() / ".quoriv" / "memory.md"),
-        ("project", cwd / "PROJECT.md"),
-    ]
+    """Show the status of memory files the agent loads.
+
+    Phase 2 Slice 1: when a candidate file exists, the agent's
+    ``MemoryMiddleware`` has already loaded it into the system prompt
+    at session start — the ``(loaded)`` tag makes that contract
+    visible. Files that aren't on disk are still listed so the user
+    knows where to drop them.
+    """
     console.print()
     console.print("[bold]Memory files[/bold]")
     any_present = False
-    for label, path in paths:
-        if path.is_file():
+    for candidate in memory_candidates(cwd):
+        if candidate.path.is_file():
             any_present = True
-            size = path.stat().st_size
+            size = candidate.path.stat().st_size
             console.print(
-                f"  [green]✓[/green] {label:<8}  [cyan]{path}[/cyan]  [dim]({size} bytes)[/dim]"
+                f"  [green]✓[/green] {candidate.label:<8}  "
+                f"[cyan]{candidate.path}[/cyan]  "
+                f"[dim]({size} bytes)[/dim]  [green](loaded)[/green]"
             )
         else:
-            console.print(f"  [dim]·[/dim] {label:<8}  [dim]{path}[/dim]  [dim](not present)[/dim]")
+            console.print(
+                f"  [dim]·[/dim] {candidate.label:<8}  "
+                f"[dim]{candidate.path}[/dim]  [dim](not present)[/dim]"
+            )
     if not any_present:
         console.print("[dim]No memory files found. Create one of the paths above and the[/dim]")
         console.print("[dim]agent will load it on next session start.[/dim]")

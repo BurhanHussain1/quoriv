@@ -32,6 +32,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 
+from quoriv.core.memory import resolve_memory_files
 from quoriv.models import get_model
 from quoriv.permissions import (
     PATH_PROTECTION,
@@ -87,6 +88,11 @@ def build_agent(
 
     backend = LocalShellBackend(root_dir=str(root), virtual_mode=True)
     interrupt_on = interrupt_on_for_mode(mode)
+    # Phase 2 Slice 1: hand DeepAgents the existing memory files so its
+    # ``MemoryMiddleware`` actually loads them into the system prompt.
+    # ``None`` (not an empty list) means "no memory middleware" — that's
+    # the contract DeepAgents documents for the ``memory=`` kwarg.
+    memory_files = [str(p) for p in resolve_memory_files(root)]
 
     return create_deep_agent(
         model=model,
@@ -95,4 +101,5 @@ def build_agent(
         middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))],
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,
+        memory=memory_files or None,
     )

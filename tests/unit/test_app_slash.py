@@ -19,6 +19,7 @@ from quoriv.app import (
     SLASH_COMMANDS,
     _build_status_line,
     _handle_slash,
+    _render_welcome,
 )
 from quoriv.core import SessionRegistry, trace_path
 from quoriv.observability import ProviderRate, TraceLogger
@@ -233,7 +234,9 @@ class TestToolsCommand:
 
 
 class TestMemoryCommand:
-    def test_reports_missing_files(self, tmp_path: Path) -> None:
+    def test_reports_missing_files(self, fake_home: Path, tmp_path: Path) -> None:
+        # ``fake_home`` keeps the global memory.md from a developer's
+        # real home from leaking into the assertion.
         console, buf = _make_console()
         _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
         output = buf.getvalue()
@@ -241,7 +244,7 @@ class TestMemoryCommand:
         assert "not present" in output  # both stubs missing -> at least one marker
         assert "No memory files found" in output
 
-    def test_reports_project_md_when_present(self, tmp_path: Path) -> None:
+    def test_reports_project_md_when_present(self, fake_home: Path, tmp_path: Path) -> None:
         (tmp_path / "PROJECT.md").write_text("# project context\n", encoding="utf-8")
         console, buf = _make_console()
         _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
@@ -249,6 +252,24 @@ class TestMemoryCommand:
         assert "PROJECT.md" in output
         assert "bytes" in output
         assert "No memory files found" not in output
+
+    def test_present_files_show_loaded_tag(self, fake_home: Path, tmp_path: Path) -> None:
+        # Phase 2 Slice 1: ``/memory`` now reflects whether the agent
+        # has actually loaded the file (it has, when it exists), not
+        # just file presence.
+        (tmp_path / "PROJECT.md").write_text("# project context\n", encoding="utf-8")
+        console, buf = _make_console()
+        _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
+        output = buf.getvalue()
+        assert "(loaded)" in output
+
+    def test_missing_files_do_not_show_loaded_tag(self, fake_home: Path, tmp_path: Path) -> None:
+        # The ``(loaded)`` tag must only appear next to files the
+        # agent's MemoryMiddleware has actually seen.
+        console, buf = _make_console()
+        _handle_slash(console, "/memory", "current", _registry(tmp_path), cwd=tmp_path)
+        output = buf.getvalue()
+        assert "(loaded)" not in output
 
 
 class TestModeCommand:
@@ -519,3 +540,36 @@ class TestBuildStatusLine:
         assert "yolo" in line
         assert "01234567" in line
         assert line.count("|") == 3
+
+
+# ---------------------------------------------------------------------------
+# Welcome panel — Phase 2 Slice 1 surfaces loaded memory files
+# ---------------------------------------------------------------------------
+
+
+class TestWelcomePanel:
+    def test_omits_memory_line_when_no_files_present(self, fake_home: Path, tmp_path: Path) -> None:
+        # Without a PROJECT.md or ~/.quoriv/memory.md, the welcome
+        # panel must not show a memory line — keeps the welcome quiet
+        # for first-time users.
+        console, buf = _make_console()
+        _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
+        assert "Memory:" not in buf.getvalue()
+
+    def test_shows_project_md_when_present(self, fake_home: Path, tmp_path: Path) -> None:
+        (tmp_path / "PROJECT.md").write_text("# project\n", encoding="utf-8")
+        console, buf = _make_console()
+        _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
+        output = buf.getvalue()
+        assert "Memory:" in output
+        assert "PROJECT.md" in output
+
+    def test_shows_global_memory_md_when_present(self, fake_home: Path, tmp_path: Path) -> None:
+        global_md = fake_home / ".quoriv" / "memory.md"
+        global_md.parent.mkdir(parents=True)
+        global_md.write_text("# user\n", encoding="utf-8")
+        console, buf = _make_console()
+        _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
+        output = buf.getvalue()
+        assert "Memory:" in output
+        assert "memory.md" in output
