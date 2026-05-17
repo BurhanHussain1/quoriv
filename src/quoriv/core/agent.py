@@ -33,6 +33,7 @@ from deepagents.backends import LocalShellBackend
 from langgraph.checkpoint.memory import MemorySaver
 
 from quoriv.core.memory import resolve_memory_files
+from quoriv.core.subagents import build_subagents
 from quoriv.models import get_model
 from quoriv.permissions import (
     PATH_PROTECTION,
@@ -93,6 +94,11 @@ def build_agent(
     # ``None`` (not an empty list) means "no memory middleware" — that's
     # the contract DeepAgents documents for the ``memory=`` kwarg.
     memory_files = [str(p) for p in resolve_memory_files(root)]
+    # Phase 2 Slice 4: register Quoriv's built-in subagents (researcher /
+    # debugger / reviewer) so the main agent can delegate via the
+    # ``task`` tool. Each role's model is resolved from the
+    # ``[subagents.*]`` block in config.
+    subagents = build_subagents(config)
 
     return create_deep_agent(
         model=model,
@@ -102,4 +108,5 @@ def build_agent(
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,
         memory=memory_files or None,
+        subagents=subagents,
     )

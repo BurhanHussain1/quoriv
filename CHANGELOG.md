@@ -382,6 +382,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 555 → 576** (+21). All gates green.
 
+#### Phase 2 Slice 4 — Per-task model routing (built-in subagents)
+- `quoriv.core.subagents` — new module: three built-in `SubAgent` specs (`researcher`, `debugger`, `reviewer`) with fixed system prompts and a `build_subagents(config)` helper that resolves each role's configured model token (`"default"` / `"fast"` / `"strong"` / a literal `"provider:name"`) into a model instance via `quoriv.models.factory.get_model`. Going through the Quoriv factory rather than letting DeepAgents call `init_chat_model` directly keeps the keychain-aware key lookup consistent across the main agent and every subagent.
+- `quoriv.config.schema` — new `SubAgentRoleConfig` (`model: str = "default"`) and `SubAgentsConfig` (`researcher` / `debugger` / `reviewer`, with defaults `"fast"` / `"strong"` / `"strong"`). `extra="forbid"` on both — invented role names and stray fields fail fast at validation. Added to `QuorivConfig` as the `subagents` section.
+- `quoriv.core.agent.build_agent` now calls `build_subagents(config)` and passes the result to `create_deep_agent(subagents=...)`. Returned shapes are typed as DeepAgents' `SubAgent` `TypedDict` via `cast` (imported under `TYPE_CHECKING` so the runtime import surface stays small).
+- `config.example.toml` documents the new `[subagents.*]` blocks with the token taxonomy and per-role defaults.
+- 16 new tests (and 1 integration-test fix):
+  - `tests/unit/core/test_subagents.py::TestResolveModelToken` (5) — `default` / `fast` / `strong` resolve through `[model]`; literal `provider:name` passes through; overridden `[model]` section flows to all tokens.
+  - `tests/unit/core/test_subagents.py::TestBuildSubagents` (6) — three roles in fixed order; every role carries name/description/system_prompt/model; researcher uses `model.fast` by default, debugger/reviewer use `model.strong` (verified by monkeypatching `quoriv.core.subagents.get_model` and capturing the requested ids); user can redirect a role to a literal model; user can redirect a role to `"default"`; role descriptions mention their job (the only signal the main agent has when routing).
+  - `tests/unit/core/test_subagents.py::TestSubAgentsConfigSchema` (4) — default routing, partial-override preserves other roles, unknown role rejected, extra-field-within-role rejected.
+  - `tests/unit/core/test_subagents.py::TestBuildAgentSubagentsWiring` (1) — `build_agent` passes a list of three subagents named `[researcher, debugger, reviewer]` into `create_deep_agent` (uses the same `create_deep_agent` capture pattern as the memory-wiring test).
+  - `tests/integration/test_e2e_stubbed_chat.py` updated to monkeypatch *both* `quoriv.core.agent.get_model` and `quoriv.core.subagents.get_model`, since each subagent now resolves its own model. Existing 4 integration tests still pass unchanged.
+
+**Test count: 576 → 592** (+16). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -398,7 +412,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 2 — remaining slices)
-- **Per-task model routing:** built-in subagents (researcher / debugger / reviewer) each with their own `model=`, configurable in TOML
 - **Python plugin API:** setuptools entry points (`quoriv.plugins`) merged into the agent's `tools=`
 - **MCP client:** `quoriv.plugins.mcp` over stdio + SSE transports
 

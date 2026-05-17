@@ -48,12 +48,14 @@ from quoriv.core.persistence import (
     trace_path,
     traces_dir,
 )
+from quoriv.core.subagents import build_subagents
 
 __all__ = [
     "MemoryCandidate",
     "NamedSession",
     "SessionRegistry",
     "build_agent",
+    "build_subagents",
     "db_path",
     "ensure_quoriv_dir",
     "memory_candidates",

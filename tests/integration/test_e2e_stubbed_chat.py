@@ -92,7 +92,12 @@ def _make_stub_agent(
     """
     msgs = iter([AIMessage(content=response) for _ in range(repeats)])
     stub = _StubChatModel(messages=msgs)
+    # Phase 2 Slice 4 added subagents — each one resolves its own
+    # model through ``quoriv.core.subagents.get_model``. Patch both
+    # references so the stub catches the main agent *and* every
+    # subagent's model lookup.
     monkeypatch.setattr("quoriv.core.agent.get_model", lambda _model_id: stub)
+    monkeypatch.setattr("quoriv.core.subagents.get_model", lambda _model_id: stub)
 
     config = QuorivConfig.model_validate({})
     return build_agent(

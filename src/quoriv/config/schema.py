@@ -123,6 +123,62 @@ class CostConfig(BaseModel):
     )
 
 
+class SubAgentRoleConfig(BaseModel):
+    """Per-role override for a built-in subagent — Phase 2 Slice 4.
+
+    Each role (researcher / debugger / reviewer) is wired by
+    :mod:`quoriv.core.subagents` with sensible defaults; this section
+    lets users redirect a role to a different model without rewriting
+    the underlying spec.
+
+    ``model`` accepts:
+
+        * ``"default"`` (the default value) — use
+          :attr:`ModelConfig.default`. Same model the main agent runs.
+        * ``"fast"`` — use :attr:`ModelConfig.fast`. Right for the
+          researcher when token cost matters more than depth.
+        * ``"strong"`` — use :attr:`ModelConfig.strong`. Right for the
+          debugger and reviewer when hard reasoning matters.
+        * Any ``"provider:name"`` literal — bypasses the lookup and
+          uses the named model directly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(
+        default="default",
+        description=(
+            "Model token: 'default' / 'fast' / 'strong' / "
+            "'provider:name'. Resolved at build_agent() time."
+        ),
+    )
+
+
+class SubAgentsConfig(BaseModel):
+    """Built-in subagent roles — researcher / debugger / reviewer.
+
+    The agent delegates to these via DeepAgents' ``task`` tool. Each
+    role ships with a fixed system prompt (see
+    :mod:`quoriv.core.subagents`); this section only routes which
+    model handles which role.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    researcher: SubAgentRoleConfig = Field(
+        default_factory=lambda: SubAgentRoleConfig(model="fast"),
+        description="Read-only exploration / discovery subagent.",
+    )
+    debugger: SubAgentRoleConfig = Field(
+        default_factory=lambda: SubAgentRoleConfig(model="strong"),
+        description="Deep-reasoning subagent for hard bug investigation.",
+    )
+    reviewer: SubAgentRoleConfig = Field(
+        default_factory=lambda: SubAgentRoleConfig(model="strong"),
+        description="Read-only critique subagent — surfaces issues in proposed changes.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -144,3 +200,4 @@ class QuorivConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     cost: CostConfig = Field(default_factory=CostConfig)
+    subagents: SubAgentsConfig = Field(default_factory=SubAgentsConfig)

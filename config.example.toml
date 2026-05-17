@@ -50,6 +50,31 @@ theme = "dark"
 disabled = []
 
 
+# [subagents]
+# Phase 2 Slice 4: per-task model routing for Quoriv's built-in
+# subagents. Three roles ship out of the box, each routed to one of
+# the models declared in `[model]` above. Override the `model` field
+# to redirect.
+#
+# Accepted tokens:
+#   "default"            use [model].default
+#   "fast"               use [model].fast
+#   "strong"             use [model].strong
+#   "provider:name"      literal — bypass the lookup
+#
+# [subagents.researcher]
+# # Read-only exploration / discovery. Defaults to "fast".
+# model = "fast"
+#
+# [subagents.debugger]
+# # Deep-reasoning bug investigation. Defaults to "strong".
+# model = "strong"
+#
+# [subagents.reviewer]
+# # Read-only critique of proposed changes. Defaults to "strong".
+# model = "strong"
+
+
 # [cost.rates]
 # Per-model USD price overrides for the `/cost` slash command. Keys are
 # `provider:model` prefixes matched by longest-prefix lookup — a more
