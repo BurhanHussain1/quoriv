@@ -354,6 +354,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 530 → 549** (+19). All gates green.
 
+#### Phase 2 Slice 2 — `quoriv init`
+- New `quoriv init [PATH]` command in `quoriv.cli` scaffolds a starter `PROJECT.md` at the target directory (defaults to `cwd`). Refuses to overwrite an existing file by default — exits non-zero with a "pass `--force` to overwrite" hint so a CI script can't silently nuke a hand-edited `PROJECT.md`. `--force` / `-f` overrides.
+- `quoriv.core.memory.PROJECT_MEMORY_TEMPLATE` — the starter content. One-screen template: top-level note explaining what Quoriv does with the file, then sections for `Project overview`, `Architecture`, `Conventions`, `Useful commands`, `Things to avoid`. Designed to fit on one screen so users can scan the shape before editing.
+- Removed an outdated `# noqa: TC003` on `from pathlib import Path` in `cli.py` — the import is now used at runtime by the new `init` command's `Path` arguments and `Path.cwd()` fallback, not just in type annotations.
+- 6 new tests in `tests/unit/test_cli.py::TestInit`:
+  - `test_creates_project_md_in_target_dir` — happy path with explicit PATH; "Created" message; file lands at `<dir>/PROJECT.md`.
+  - `test_refuses_to_overwrite_by_default` — pre-existing `PROJECT.md` survives untouched; exit code non-zero; output mentions `--force`.
+  - `test_force_overwrites_existing` — `--force` replaces the file; "Overwrote" message; old content gone; new content carries the template header.
+  - `test_force_short_flag` — `-f` short form works the same as `--force`.
+  - `test_template_covers_expected_sections` — guards the UX of the starter: all six headings must be present (regression catcher for an accidental template gut).
+  - `test_no_path_writes_to_cwd` — without an argument, writes to `Path.cwd()` (monkeypatched to `tmp_path` because Typer's `CliRunner` doesn't chdir).
+- `TestTopLevel::test_help_lists_commands` updated to include `init` in the expected command list.
+
+**Test count: 549 → 555** (+6). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -370,7 +385,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 2 — remaining slices)
-- **`quoriv init`:** scaffold a starter `PROJECT.md` (small follow-up to Slice 1)
 - **"Always allow" allowlist:** UX layer on top of `interrupt_on` — promote a one-time approval to permanent for the session
 - **Per-task model routing:** built-in subagents (researcher / debugger / reviewer) each with their own `model=`, configurable in TOML
 - **Python plugin API:** setuptools entry points (`quoriv.plugins`) merged into the agent's `tools=`
