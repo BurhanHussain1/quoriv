@@ -59,7 +59,12 @@ from quoriv.observability import (
     estimate_cost,
     lookup_rate,
 )
-from quoriv.permissions import PermissionMode, interrupt_on_for_mode, is_read_only
+from quoriv.permissions import (
+    PermissionMode,
+    SessionAllowlist,
+    interrupt_on_for_mode,
+    is_read_only,
+)
 from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
     ApprovalDecision,
@@ -210,6 +215,11 @@ async def _interactive_loop(
     """
     thread_id = _new_thread_id()
     tracer = TraceLogger(trace_path(cwd, thread_id))
+    # Phase 2 Slice 3: per-session allowlist. Lives for the whole
+    # ``run_chat`` invocation and survives ``/clear`` (the user
+    # promoted these tools deliberately; rotating the thread shouldn't
+    # silently un-promote them).
+    allowlist = SessionAllowlist()
 
     def _toolbar() -> str:
         # Closure reads the latest ``thread_id`` and ``permission_mode``
@@ -286,6 +296,7 @@ async def _interactive_loop(
                 thread_id,
                 permission_mode,
                 tracer=tracer,
+                allowlist=allowlist,
             )
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
@@ -699,6 +710,7 @@ async def _drive_turn(
     mode: PermissionMode,
     *,
     tracer: TraceLogger | None = None,
+    allowlist: SessionAllowlist | None = None,
 ) -> None:
     """Drive one full user turn end-to-end, handling HITL interrupts.
 
@@ -712,6 +724,12 @@ async def _drive_turn(
 
     When ``tracer`` is supplied, the turn is bracketed with
     ``turn_start`` / ``turn_end`` events in the JSONL trace log.
+
+    Phase 2 Slice 3: when ``allowlist`` is supplied, ``_collect_decisions``
+    auto-approves any HITL action whose tool name is on it (and the user
+    can promote a one-off approval to a session-persistent one by picking
+    ``approve_always`` at the prompt). ``None`` keeps the legacy "always
+    prompt" behavior so existing test entry points stay unaffected.
     """
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     next_input: Any = {"messages": [HumanMessage(content=user_input)]}
@@ -730,7 +748,12 @@ async def _drive_turn(
             if hitl_request is None:
                 return
 
-            decisions = await _collect_decisions(console, hitl_request, auto_deny=auto_deny)
+            decisions = await _collect_decisions(
+                console,
+                hitl_request,
+                auto_deny=auto_deny,
+                allowlist=allowlist,
+            )
             next_input = Command(resume={"decisions": decisions})
     finally:
         if tracer is not None:
@@ -861,24 +884,65 @@ async def _collect_decisions(
     hitl_request: dict[str, Any],
     *,
     auto_deny: bool,
+    allowlist: SessionAllowlist | None = None,
 ) -> list[dict[str, Any]]:
-    """Prompt the user for each ``ActionRequest`` and serialize the decisions."""
+    """Prompt the user for each ``ActionRequest`` and serialize the decisions.
+
+    Phase 2 Slice 3: when an ``allowlist`` is supplied and the action's
+    tool name is already on it, the prompt is skipped and the decision
+    auto-resolves to ``approve``. When the user picks ``approve_always``
+    at a prompt, the tool name is added to the allowlist so subsequent
+    invocations skip the prompt too.
+
+    ``auto_deny`` (``read-only`` mode) always takes precedence over the
+    allowlist — a remembered approval doesn't override read-only.
+    """
     decisions: list[dict[str, Any]] = []
     for action in hitl_request.get("action_requests", []):
+        tool_name = action.get("name", "?")
+        if (
+            allowlist is not None
+            and not auto_deny
+            and isinstance(tool_name, str)
+            and tool_name in allowlist
+        ):
+            console.print(
+                f"[dim]auto-approved [cyan]{tool_name}[/cyan] (allowlisted this session)[/dim]"
+            )
+            decisions.append({"type": "approve"})
+            continue
+
         decision = await prompt_approval(
             console,
-            tool_name=action.get("name", "?"),
+            tool_name=tool_name,
             tool_args=action.get("args", {}),
             description=action.get("description"),
             auto_deny=auto_deny,
         )
+        if (
+            decision.type == "approve_always"
+            and allowlist is not None
+            and isinstance(tool_name, str)
+        ):
+            allowlist.allow(tool_name)
+            console.print(
+                f"[green]Will auto-approve[/green] [cyan]{tool_name}[/cyan] "
+                f"[green]for the rest of this session.[/green]"
+            )
         decisions.append(_decision_payload(decision))
     return decisions
 
 
 def _decision_payload(decision: ApprovalDecision) -> dict[str, Any]:
-    """Convert an :class:`ApprovalDecision` to the HITL resume schema."""
-    payload: dict[str, Any] = {"type": decision.type}
+    """Convert an :class:`ApprovalDecision` to the HITL resume schema.
+
+    ``approve_always`` is a UX-only signal — DeepAgents only understands
+    ``approve`` / ``reject`` / ``edit`` / ``respond``, so we map it back
+    to ``approve`` here. The chat loop is responsible for promoting the
+    tool name into the :class:`SessionAllowlist` before this conversion.
+    """
+    payload_type = "approve" if decision.type == "approve_always" else decision.type
+    payload: dict[str, Any] = {"type": payload_type}
     if decision.message is not None:
         payload["message"] = decision.message
     return payload

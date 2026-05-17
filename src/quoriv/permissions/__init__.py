@@ -24,16 +24,15 @@ Modules:
     guard       ``PathProtectionMiddleware`` — the actual enforcement
                 layer. Plugged into ``create_deep_agent(middleware=...)``
                 by :func:`quoriv.core.agent.build_agent`.
-
-What's **not** here, and why:
-
-    - No ``allowlist.py`` (yet) — Phase 2 UX layer for "always allow"
-      promotion of one-off approvals to persistent ``interrupt_on``
-      exceptions.
+    allowlist   Phase 2 Slice 3 — :class:`SessionAllowlist`, the
+                in-memory store backing the ``approve_always`` HITL
+                option. UX layer only; DeepAgents still sees plain
+                ``approve`` decisions.
 """
 
 from __future__ import annotations
 
+from quoriv.permissions.allowlist import SessionAllowlist
 from quoriv.permissions.guard import PathProtectionMiddleware
 from quoriv.permissions.modes import (
     GIT_WRITE_TOOLS,
@@ -52,6 +51,7 @@ __all__ = [
     "WRITE_TOOLS",
     "PathProtectionMiddleware",
     "PermissionMode",
+    "SessionAllowlist",
     "interrupt_on_for_mode",
     "is_read_only",
 ]

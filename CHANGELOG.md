@@ -369,6 +369,19 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 549 → 555** (+6). All gates green.
 
+#### Phase 2 Slice 3 — "Always allow" session allowlist
+- `quoriv.permissions.allowlist` — new module: `SessionAllowlist`, an in-memory set of tool names the user has promoted from a one-time HITL approval to a session-persistent one. ``__contains__``, ``allow``, ``clear``, ``__len__``, ``tools()`` returning an immutable ``frozenset`` snapshot. Keyed by tool name only (matches the granularity ``interrupt_on=`` itself uses).
+- `quoriv.ui.prompts.DecisionType` gained `"approve_always"`. The interactive prompt now reads `approve / reject / always [a/r/A]`. `parse_choice` accepts `A`, `aa`, and the spelled-out `always` (case-insensitive) for the new decision; bare lowercase `a` still means "approve once" so a user can't accidentally promote a tool by typing the same key as before.
+- `quoriv.app._collect_decisions` consults the allowlist before calling `prompt_approval`: matching tools auto-resolve to `approve` with a `[dim]auto-approved <tool> (allowlisted this session)[/dim]` note. When the user picks `approve_always`, the tool name is added to the allowlist and a `[green]Will auto-approve …[/green]` confirmation is rendered. ``auto_deny`` (read-only mode) always wins over the allowlist — a remembered approval doesn't unlock read-only.
+- `quoriv.app._decision_payload` maps `approve_always` → `{"type": "approve"}` on the wire. DeepAgents only speaks `approve` / `reject` / `edit` / `respond`; the allowlist promotion is a Quoriv UX layer.
+- `quoriv.app._interactive_loop` creates one `SessionAllowlist` per `run_chat` invocation and threads it through `_drive_turn` → `_collect_decisions`. Survives `/clear` (the user promoted these tools deliberately; rotating the thread shouldn't silently un-promote them).
+- 21 new tests:
+  - `tests/unit/permissions/test_allowlist.py::TestSessionAllowlist` (7) — empty default, `allow` adds, idempotency, `__contains__` tolerates non-strings, `tools()` returns an immutable snapshot, `clear`, independent multi-tool tracking.
+  - `tests/unit/ui/test_prompts.py::TestParseChoice::test_approve_always_aliases` (1 parametrized × 6 inputs) — covers `A`, `aa`, `always`, `Always`, `ALWAYS`, and whitespace-padded forms. The `test_approve_aliases` parametrize lost the bare `"A"` entry, since capital `A` is now reserved for `approve_always`; the comment in-place documents the split.
+  - `tests/unit/test_app_decisions.py` (9) — `TestDecisionPayload` (3): approve passthrough, reject keeps message, approve_always → approve. `TestCollectDecisionsAllowlist` (6): allowlisted tool skips prompt; non-allowlisted still prompts; approve_always promotes; second call uses the promoted entry (single prompt across two calls); `auto_deny` wins over allowlist; `None` allowlist preserves legacy "always prompt" behavior.
+
+**Test count: 555 → 576** (+21). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -385,7 +398,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 2 — remaining slices)
-- **"Always allow" allowlist:** UX layer on top of `interrupt_on` — promote a one-time approval to permanent for the session
 - **Per-task model routing:** built-in subagents (researcher / debugger / reviewer) each with their own `model=`, configurable in TOML
 - **Python plugin API:** setuptools entry points (`quoriv.plugins`) merged into the agent's `tools=`
 - **MCP client:** `quoriv.plugins.mcp` over stdio + SSE transports

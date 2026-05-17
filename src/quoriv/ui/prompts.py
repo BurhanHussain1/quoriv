@@ -30,8 +30,21 @@ if TYPE_CHECKING:
     from rich.console import Console
 
 
-DecisionType = Literal["approve", "reject"]
-"""Decision kinds Slice 2 emits. ``edit`` and ``respond`` are deferred."""
+DecisionType = Literal["approve", "reject", "approve_always"]
+"""Decision kinds the prompt emits.
+
+``approve`` — approve this single call.
+``reject`` — deny this call (``message`` carries optional context).
+``approve_always`` — approve this call **and** remember the tool for
+    the rest of the session (Phase 2 Slice 3). The HITL resume payload
+    sent to DeepAgents always uses ``approve``; ``approve_always`` is
+    a UX signal that the chat loop should also add the tool to the
+    session :class:`quoriv.permissions.SessionAllowlist`.
+
+``edit`` and ``respond`` (the other two decision types accepted by the
+middleware) land in later slices once the UI for editing tool args
+exists.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,15 +102,22 @@ async def prompt_approval(
     session: PromptSession[str] = PromptSession()
     while True:
         raw = await session.prompt_async(
-            HTML("<ansigreen>approve</ansigreen> / <ansired>reject</ansired>  [a/r] > ")
+            HTML(
+                "<ansigreen>approve</ansigreen> / "
+                "<ansired>reject</ansired> / "
+                "<ansiyellow>always</ansiyellow>  [a/r/A] > "
+            )
         )
         choice = parse_choice(raw)
         if choice == "approve":
             return ApprovalDecision(type="approve")
+        if choice == "approve_always":
+            return ApprovalDecision(type="approve_always")
         if choice == "reject":
             return ApprovalDecision(type="reject", message="User rejected this tool call.")
         console.print(
-            "[dim]Please answer 'a' (approve) or 'r' (reject). Aliases: y/yes/n/no.[/dim]"
+            "[dim]Please answer 'a' (approve), 'r' (reject), or 'A' / 'always' "
+            "(approve and remember for this session). Aliases: y/yes/n/no.[/dim]"
         )
 
 
@@ -105,10 +125,20 @@ def parse_choice(raw: str) -> DecisionType | None:
     """Parse a raw input string into a decision type, or ``None`` if invalid.
 
     Accepted aliases:
-        approve: a, approve, y, yes
-        reject:  r, reject, n, no, deny
+        approve:        a, approve, y, yes
+        approve_always: A, always, aa  (capital A is the only single-letter
+                        form that distinguishes from "approve once" — kept
+                        case-sensitive on purpose so a lowercase "a" never
+                        accidentally promotes the tool)
+        reject:         r, reject, n, no, deny
+
+    Note: this function preserves case for the ``A`` short form. Every
+    other alias is matched case-insensitively.
     """
-    norm = raw.strip().lower()
+    stripped = raw.strip()
+    if stripped in {"A", "aa"} or stripped.lower() == "always":
+        return "approve_always"
+    norm = stripped.lower()
     if norm in {"a", "approve", "y", "yes"}:
         return "approve"
     if norm in {"r", "reject", "n", "no", "deny"}:

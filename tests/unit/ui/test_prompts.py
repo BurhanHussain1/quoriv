@@ -35,9 +35,18 @@ def _make_console() -> tuple[Console, StringIO]:
 
 
 class TestParseChoice:
-    @pytest.mark.parametrize("raw", ["a", "approve", "y", "yes", "A", " yes  ", "Approve"])
+    # Note: capital ``A`` is now reserved for ``approve_always`` (Slice 3).
+    # Lowercase ``a`` and the spelled-out word stay for plain approve.
+    @pytest.mark.parametrize("raw", ["a", "approve", "y", "yes", " yes  ", "Approve"])
     def test_approve_aliases(self, raw: str) -> None:
         assert parse_choice(raw) == "approve"
+
+    @pytest.mark.parametrize("raw", ["A", "aa", "always", "Always", "  always  ", "ALWAYS"])
+    def test_approve_always_aliases(self, raw: str) -> None:
+        # ``A`` is the only single-letter form. The spelled-out word is
+        # case-insensitive. ``aa`` is an alternate short form for users
+        # who don't want to fiddle with shift.
+        assert parse_choice(raw) == "approve_always"
 
     @pytest.mark.parametrize("raw", ["r", "reject", "n", "no", "deny", "R", " no "])
     def test_reject_aliases(self, raw: str) -> None:
