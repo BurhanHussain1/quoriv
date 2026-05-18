@@ -16,12 +16,15 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any, cast
 
+from loguru import logger
+
 from quoriv.models.base import ModelSpec
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from langchain_core.language_models import BaseChatModel
+    from langchain_core.runnables import Runnable
 
     BuilderFn = Callable[..., BaseChatModel]
 
@@ -86,3 +89,51 @@ def _load_builder(provider: str) -> BuilderFn:
     module_path, _, attr = spec_str.partition(":")
     module = importlib.import_module(module_path)
     return cast("BuilderFn", getattr(module, attr))
+
+
+def with_fallbacks(
+    primary: BaseChatModel,
+    fallback_ids: Iterable[str],
+) -> BaseChatModel | Runnable[Any, Any]:
+    """Wrap ``primary`` with a fallback chain — Phase 3 Slice 9.
+
+    Calls :func:`get_model` on each id in ``fallback_ids``, then hands
+    the resulting list to LangChain's ``primary.with_fallbacks(...)``.
+    The returned runnable invokes ``primary`` first; on a raised
+    exception it walks the fallback list in order and surfaces the
+    first response that lands.
+
+    A fallback id that fails to build (missing API key, unknown
+    provider, malformed identifier) is **logged and skipped** rather
+    than aborting agent startup — a user whose default provider is
+    Anthropic but who only has OpenAI configured should still get a
+    working chat, just without that one fallback. If *every* fallback
+    fails to build, the primary is returned unwrapped (no chain at
+    all).
+
+    Args:
+        primary: Already-built chat model from :func:`get_model`.
+        fallback_ids: Ordered ``provider:model`` identifiers to try
+            on primary failure. Empty iterable returns ``primary``
+            unchanged.
+
+    Returns:
+        Either ``primary`` (no fallbacks configured or buildable) or
+        a runnable that walks ``primary`` then each fallback. The
+        runnable type matches what LangChain's
+        ``Runnable.with_fallbacks`` returns; from the agent's point
+        of view it behaves like any other chat model.
+    """
+    fallback_models: list[BaseChatModel] = []
+    for fid in fallback_ids:
+        try:
+            fallback_models.append(get_model(fid))
+        except Exception as exc:  # multiple bespoke errors per provider
+            logger.warning(
+                "fallback model {!r} failed to build ({}); skipping.",
+                fid,
+                exc,
+            )
+    if not fallback_models:
+        return primary
+    return primary.with_fallbacks(fallback_models)

@@ -26,7 +26,7 @@ enforce path protection at the middleware layer instead. See
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
@@ -34,7 +34,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from quoriv.core.memory import resolve_memory_files
 from quoriv.core.subagents import build_subagents
-from quoriv.models import get_model
+from quoriv.models import get_model, with_fallbacks
 from quoriv.permissions import (
     PATH_PROTECTION,
     PathProtectionMiddleware,
@@ -91,7 +91,19 @@ def build_agent(
             provider.
     """
     model_id = model_override or config.model.default
-    model = get_model(model_id)
+    primary_model = get_model(model_id)
+    # Phase 3 Slice 9: if the user configured ``[model].fallbacks``,
+    # wrap the primary with LangChain's ``with_fallbacks`` so a
+    # transient failure on the primary (rate limit, 5xx, network
+    # error) automatically rolls over to the next id in the list.
+    # Fallbacks that fail to build are logged and skipped — never
+    # block agent startup.
+    # ``with_fallbacks`` may return a ``RunnableWithFallbacks`` (not a
+    # ``BaseChatModel``) when fallbacks are configured, but DeepAgents'
+    # ``model=`` parameter accepts any LangChain runnable at runtime.
+    # The cast keeps mypy quiet without weakening the public typing of
+    # ``with_fallbacks``.
+    model = cast("Any", with_fallbacks(primary_model, config.model.fallbacks))
     root = cwd if cwd is not None else Path.cwd()
 
     backend = LocalShellBackend(root_dir=str(root), virtual_mode=True)

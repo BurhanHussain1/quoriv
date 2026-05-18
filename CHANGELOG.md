@@ -546,6 +546,18 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 695 → 714** (+19). All gates green.
 
+#### Phase 3 Slice 9 — Fallback chains
+- `quoriv.config.schema.ModelConfig.fallbacks: list[str]` — new ordered list of `provider:model` identifiers to try when the primary model raises a transient error (rate limit, 5xx, network failure). Empty default disables fallbacks.
+- `quoriv.models.factory.with_fallbacks(primary, fallback_ids)` — builds each fallback via `get_model` and wraps the primary with LangChain's `Runnable.with_fallbacks(...)`. Defensive: a fallback id that fails to build (missing key, unknown provider, malformed id) is **logged and skipped** rather than aborting agent startup. If *every* fallback fails, the primary is returned unwrapped (no chain at all) so the user still gets a working session.
+- `quoriv.core.agent.build_agent` wraps the primary model via `with_fallbacks(primary_model, config.model.fallbacks)` before passing it to `create_deep_agent`. The return type can be either `BaseChatModel` (no fallbacks) or `RunnableWithFallbacks` (chain assembled); a `cast` at the call site keeps mypy happy without weakening the public typing of `with_fallbacks`.
+- 6 new tests in `tests/unit/models/test_fallbacks.py`:
+  - `TestEmptyFallbacks` (2) — empty iterable returns primary unchanged with no `get_model` calls; an all-failing fallback list also returns primary unchanged (every fallback raises at build time).
+  - `TestChainAssembly` (2) — single fallback wraps primary via `.with_fallbacks(...)` and `get_model` is called with the expected id; multiple fallbacks preserve user-supplied order all the way through.
+  - `TestPartialFailure` (1) — middle fallback raises at build time, first and third still land in the chain (skip + continue, not abort).
+  - `TestIntegrationSmoke` (1) — `with_fallbacks` against a real `RunnableLambda` primary returns a real `RunnableWithFallbacks`, catching future API drift in LangChain.
+
+**Test count: 714 → 720** (+6). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -564,7 +576,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 ### Coming next (Phase 3 — remaining slices)
 - **Hooks system** (pre-tool / post-tool / on-message subscribers)
 - **Replay mode** (rerun a past session for debugging)
-- **Fallback chains** (Anthropic → OpenAI → Ollama on transient failure)
 - **Eval harness** (small task set for regression catching)
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers

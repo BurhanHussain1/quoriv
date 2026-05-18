@@ -19,6 +19,7 @@ from quoriv.models.factory import (
     UnknownProviderError,
     get_model,
     list_providers,
+    with_fallbacks,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "UnknownProviderError",
     "get_model",
     "list_providers",
+    "with_fallbacks",
 ]

@@ -51,6 +51,16 @@ class ModelConfig(BaseModel):
         default="openai:gpt-4.1",
         description="Strong model for hard reasoning (planning, coding).",
     )
+    fallbacks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of 'provider:model' identifiers to try when "
+            "the primary model raises a transient error (rate limit, "
+            "5xx, network failure). LangChain's RunnableWithFallbacks "
+            "walks the list in order and surfaces the first response "
+            "that lands. Empty list (the default) disables fallbacks."
+        ),
+    )
 
 
 class PermissionsConfig(BaseModel):
