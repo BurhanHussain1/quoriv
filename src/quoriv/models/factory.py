@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 _PROVIDERS: dict[str, str] = {
     "openai": "quoriv.models.openai:build",
     "anthropic": "quoriv.models.anthropic:build",
+    "ollama": "quoriv.models.ollama:build",
     # Phase 3 additions (uncomment when implemented):
     # "gemini":     "quoriv.models.gemini:build",
-    # "ollama":     "quoriv.models.ollama:build",
     # "vllm":       "quoriv.models.vllm:build",
     # "openrouter": "quoriv.models.openrouter:build",
 }

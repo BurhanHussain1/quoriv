@@ -34,7 +34,7 @@ jobs:
       - name: Install package + dev deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,ast,mcp,anthropic]"
+          pip install -e ".[dev,ast,mcp,anthropic,ollama]"
 
       - name: Run tests
         run: pytest -ra --cov=quoriv --cov-report=xml

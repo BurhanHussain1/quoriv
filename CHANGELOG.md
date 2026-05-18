@@ -446,6 +446,19 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 638 → 645** (+7). All gates green.
 
+#### Phase 3 Slice 2 — Ollama provider (local, no API key)
+- `quoriv.models.ollama` — new provider module. Builds `langchain_ollama.ChatOllama` with `model=spec.name`. Unlike the OpenAI / Anthropic providers, Ollama runs locally (or on a user-controlled host), so **no API key is required** — the provider is intentionally absent from `PROVIDER_ENV_VARS`. No network call at construction time, so `build_agent` can succeed even when the Ollama server isn't running yet (connection errors surface at first invocation, not at startup). Requires the `[ollama]` install extra.
+- `quoriv.models.factory._PROVIDERS` registers `ollama`. `list_providers()` now returns `["anthropic", "ollama", "openai"]` (sorted).
+- The CI install line in `.github/workflows/test.yml` and the mypy job in `.github/workflows/lint.yml` add `ollama` to the extras: `pip install -e ".[dev,ast,mcp,anthropic,ollama]"`. Same pattern as P3-1.
+- Identifier shape preserved through `ModelSpec.parse`: Ollama tags carry an embedded colon (`qwen2.5-coder:32b`), and the parser splits on the *first* colon only — already documented and tested in `test_base.py`, now re-asserted at the provider level for `qwen2.5-coder:32b` and `llama3.1:70b-instruct-q4_0`.
+- 7 new tests:
+  - `tests/unit/models/test_ollama.py::TestBuild` (2) — returns `ChatOllama` with the model name preserved; no network call at construction (build succeeds for an unpulled model).
+  - `tests/unit/models/test_ollama.py::TestModelNameWithTag` (2) — second colon (the tag) stays attached to `spec.name`; real-world `llama3.1:70b-instruct-q4_0` shape round-trips.
+  - `tests/unit/models/test_ollama.py::TestKwargsForwarded` (2) — `base_url` forwarded (for non-default hosts like Docker / remote boxes), `temperature` forwarded.
+  - `tests/unit/models/test_factory.py::TestListProviders::test_ollama_registered_in_phase_3` (1) — factory dispatch picks it up.
+
+**Test count: 645 → 652** (+7). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -462,7 +475,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Providers:** Ollama (local, no API key), Gemini, vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
+- **Providers:** Gemini, vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
 - **Web tools:** `web_search`, `web_fetch`
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers
