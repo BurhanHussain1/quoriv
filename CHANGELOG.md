@@ -488,6 +488,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 659 → 669** (+10). All gates green.
 
+#### Phase 3 Slice 5 — OpenRouter provider
+- `quoriv.models.openrouter` — new provider module. OpenRouter routes hundreds of models from different vendors through a single OpenAI-compatible API, so the provider builds a `langchain_openai.ChatOpenAI` instance pointed at `https://openrouter.ai/api/v1` (overridable via `base_url=` kwarg for OpenRouter proxies / staging endpoints). API key resolved via `get_api_key("openrouter")` (env `OPENROUTER_API_KEY` first, then keychain — both already in `PROVIDER_ENV_VARS`). Unlike vLLM, the key **is** required — OpenRouter is a paid service — so `MissingAPIKeyError` is raised when both sources are empty.
+- Identifier shape: `openrouter:<vendor>/<model>` (e.g. `openrouter:anthropic/claude-3.5-sonnet`, `openrouter:meta-llama/llama-3.1-405b-instruct`). The vendor/model slash is part of the name half; `ModelSpec.parse` preserves it because the split is on the *first* colon only.
+- `quoriv.models.factory._PROVIDERS` registers `openrouter`. `list_providers()` now returns `["anthropic", "gemini", "ollama", "openai", "openrouter", "vllm"]` (sorted) — all 6 Phase 3 providers wired.
+- No CI extras change — OpenRouter uses the OpenAI SDK already in core dependencies.
+- 8 new tests:
+  - `tests/unit/models/test_openrouter.py::TestMissingKey` (1) — `MissingAPIKeyError("openrouter", "OPENROUTER_API_KEY")` shape.
+  - `tests/unit/models/test_openrouter.py::TestBuildFromEnv` (2) — env-var key resolves to `ChatOpenAI` with model preserved; default `base_url` points at OpenRouter's cloud endpoint.
+  - `tests/unit/models/test_openrouter.py::TestBuildFromKeyring` (1) — keychain fallback when env is unset.
+  - `tests/unit/models/test_openrouter.py::TestIdentifierShapes` (1) — vendor/model slash survives through `ModelSpec.parse` and reaches `ChatOpenAI.model_name`.
+  - `tests/unit/models/test_openrouter.py::TestKwargOverrides` (2) — explicit `base_url=` overrides the default; `temperature` forwards through.
+  - `tests/unit/models/test_factory.py::TestListProviders::test_openrouter_registered_in_phase_3` (1) — factory dispatch picks it up.
+
+**Test count: 669 → 677** (+8). All gates green. All 6 Phase 3 providers (Anthropic, Ollama, Gemini, vLLM, OpenRouter, plus the pre-existing OpenAI) are now wired.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -504,7 +519,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Provider:** OpenRouter — mirrors the Anthropic / OpenAI provider shape
 - **Web tools:** `web_search`, `web_fetch`
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers

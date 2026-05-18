@@ -34,8 +34,7 @@ _PROVIDERS: dict[str, str] = {
     "ollama": "quoriv.models.ollama:build",
     "gemini": "quoriv.models.gemini:build",
     "vllm": "quoriv.models.vllm:build",
-    # Phase 3 additions (uncomment when implemented):
-    # "openrouter": "quoriv.models.openrouter:build",
+    "openrouter": "quoriv.models.openrouter:build",
 }
 
 
