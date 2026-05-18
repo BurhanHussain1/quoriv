@@ -459,6 +459,19 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 645 → 652** (+7). All gates green.
 
+#### Phase 3 Slice 3 — Google Gemini provider
+- `quoriv.models.gemini` — new provider module. Builds `langchain_google_genai.ChatGoogleGenerativeAI` with `model=spec.name` and `google_api_key=...` (the LangChain wrapper's chosen kwarg name; differs from `api_key` used by OpenAI / Anthropic). Resolves the API key through `get_api_key("gemini")` — `quoriv.config.keychain` already routes both `gemini` and `google` provider names to the `GOOGLE_API_KEY` env var, so the precedence rules match the other cloud providers. Raises `MissingAPIKeyError("gemini", "GOOGLE_API_KEY")` when both env and keychain are absent. Requires the `[gemini]` install extra.
+- `quoriv.models.factory._PROVIDERS` registers `gemini`. `list_providers()` now returns `["anthropic", "gemini", "ollama", "openai"]` (sorted).
+- CI install line in `.github/workflows/test.yml` and the mypy job in `.github/workflows/lint.yml` add `gemini` to the extras: `pip install -e ".[dev,ast,mcp,anthropic,ollama,gemini]"`.
+- 7 new tests:
+  - `tests/unit/models/test_gemini.py::TestMissingKey` (1) — `MissingAPIKeyError("gemini", "GOOGLE_API_KEY")` shape.
+  - `tests/unit/models/test_gemini.py::TestBuildFromEnv` (2) — env-var key resolves to a `ChatGoogleGenerativeAI` with the model preserved; `gemini-1.5-pro` round-trips alongside `gemini-1.5-flash`.
+  - `tests/unit/models/test_gemini.py::TestBuildFromKeyring` (1) — keychain fallback when env is unset.
+  - `tests/unit/models/test_gemini.py::TestKwargsForwarded` (2) — `temperature` forwarded; `max_output_tokens` forwarded (note: differs from OpenAI's `max_tokens` / Anthropic's `max_tokens_to_sample` — Gemini uses its own name).
+  - `tests/unit/models/test_factory.py::TestListProviders::test_gemini_registered_in_phase_3` (1) — factory dispatch picks it up.
+
+**Test count: 652 → 659** (+7). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -475,7 +488,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Providers:** Gemini, vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
+- **Providers:** vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
 - **Web tools:** `web_search`, `web_fetch`
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers
