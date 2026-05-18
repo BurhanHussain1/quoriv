@@ -90,6 +90,9 @@ anthropic = ["langchain-anthropic>=0.2.0"]
 gemini = ["langchain-google-genai>=2.0.0"]
 ollama = ["langchain-ollama>=0.2.0"]
 
+# Web tools (Phase 3 Slice 7) — Tavily backs ``web_search``.
+search = ["tavily-python>=0.7.0"]
+
 # Bundle of all providers
 all-providers = [
     "langchain-anthropic>=0.2.0",
@@ -201,6 +204,7 @@ module = [
     "langgraph.*",
     "tree_sitter.*",
     "tree_sitter_languages.*",
+    "tavily.*",
 ]
 ignore_missing_imports = true
 

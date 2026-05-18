@@ -14,8 +14,9 @@ from typing import Any
 import httpx
 import pytest
 
+from quoriv.config.keychain import set_api_key
 from quoriv.tools import QUORIV_TOOLS
-from quoriv.tools.web import _DEFAULT_MAX_CHARS, web_fetch
+from quoriv.tools.web import _DEFAULT_MAX_CHARS, web_fetch, web_search
 
 
 class _FakeResponse:
@@ -204,6 +205,7 @@ class TestToolSurface:
         # Smoke check that the agent will see this tool.
         names = [t.name for t in QUORIV_TOOLS]
         assert "web_fetch" in names
+        assert "web_search" in names
 
     def test_has_useful_description(self) -> None:
         # Docstring becomes the tool description the model sees.
@@ -212,3 +214,175 @@ class TestToolSurface:
         # so the model can route to it.
         assert "fetch" in desc
         assert "url" in desc
+
+
+# ---------------------------------------------------------------------------
+# web_search — Phase 3 Slice 7 (Tavily backend, monkeypatched)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTavilyClient:
+    """Captures init + search args and returns a canned response."""
+
+    last_instance: _FakeTavilyClient | None = None
+
+    def __init__(self, api_key: str | None = None) -> None:
+        self.api_key = api_key
+        self.search_kwargs: dict[str, Any] = {}
+        _FakeTavilyClient.last_instance = self
+        self._response: dict[str, Any] = {
+            "results": [
+                {
+                    "title": "Result 1",
+                    "url": "https://example.com/1",
+                    "content": "snippet 1",
+                    "score": 0.95,
+                },
+                {
+                    "title": "Result 2",
+                    "url": "https://example.com/2",
+                    "content": "snippet 2",
+                    "score": 0.81,
+                },
+            ]
+        }
+
+    def search(self, **kwargs: Any) -> dict[str, Any]:
+        self.search_kwargs = kwargs
+        return self._response
+
+
+def _patch_tavily(monkeypatch: pytest.MonkeyPatch, client_cls: type = _FakeTavilyClient) -> None:
+    # ``tavily-python`` is already installed in the dev env (and in
+    # CI via the ``[search]`` extra). Patch the class the tool imports
+    # via ``from tavily import TavilyClient`` so each test owns the
+    # behavior of one fake client.
+    import tavily  # noqa: PLC0415  (intentional lazy import)
+
+    monkeypatch.setattr(tavily, "TavilyClient", client_cls)
+
+
+class TestWebSearchMissingKey:
+    def test_no_key_returns_structured_error(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # ``fake_keyring`` clears env + keychain. The tool must
+        # return an error dict, *not* raise, so the agent can
+        # recover and try a different approach.
+        _patch_tavily(monkeypatch)
+        result = web_search.invoke({"query": "anything"})
+        assert "error" in result
+        assert "TAVILY_API_KEY" in result["error"]
+        assert result["query"] == "anything"
+        assert "results" not in result
+
+
+class TestWebSearchHappyPath:
+    def test_returns_normalized_results(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+        _patch_tavily(monkeypatch)
+        result = web_search.invoke({"query": "python typing tutorial"})
+        assert result["query"] == "python typing tutorial"
+        results = result["results"]
+        assert isinstance(results, list)
+        assert len(results) == 2
+        # Each row carries title / url / content / score — and
+        # nothing else (raw_content stripped).
+        assert results[0] == {
+            "title": "Result 1",
+            "url": "https://example.com/1",
+            "content": "snippet 1",
+            "score": 0.95,
+        }
+
+    def test_uses_keyring_when_no_env(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        set_api_key("tavily", "tvly-keyring")
+        _patch_tavily(monkeypatch)
+        result = web_search.invoke({"query": "x"})
+        # The fake client captures the key it was constructed with.
+        assert _FakeTavilyClient.last_instance is not None
+        assert _FakeTavilyClient.last_instance.api_key == "tvly-keyring"
+        assert "results" in result
+
+    def test_max_results_forwarded(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+        _patch_tavily(monkeypatch)
+        web_search.invoke({"query": "x", "max_results": 12})
+        assert _FakeTavilyClient.last_instance is not None
+        assert _FakeTavilyClient.last_instance.search_kwargs["max_results"] == 12
+
+    def test_include_and_exclude_domains_forwarded(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+        _patch_tavily(monkeypatch)
+        web_search.invoke(
+            {
+                "query": "x",
+                "include_domains": ["docs.python.org"],
+                "exclude_domains": ["spam.example"],
+            }
+        )
+        assert _FakeTavilyClient.last_instance is not None
+        kw = _FakeTavilyClient.last_instance.search_kwargs
+        assert kw["include_domains"] == ["docs.python.org"]
+        assert kw["exclude_domains"] == ["spam.example"]
+
+
+class TestWebSearchFailure:
+    def test_api_error_returns_structured_error(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _BoomClient:
+            def __init__(self, api_key: str | None = None) -> None:
+                self.api_key = api_key
+
+            def search(self, **_kwargs: Any) -> dict[str, Any]:
+                raise RuntimeError("simulated upstream error")
+
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+        _patch_tavily(monkeypatch, client_cls=_BoomClient)
+        result = web_search.invoke({"query": "x"})
+        assert "error" in result
+        assert "simulated upstream error" in result["error"]
+        assert result["query"] == "x"
+        assert "results" not in result
+
+    def test_non_dict_response_yields_empty_results(
+        self,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Defensive: if the SDK ever returns something weirdly
+        # shaped, fall through to an empty list rather than crash.
+        class _WeirdClient:
+            def __init__(self, api_key: str | None = None) -> None:
+                pass
+
+            def search(self, **_kwargs: Any) -> Any:
+                return "not a dict"
+
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+        _patch_tavily(monkeypatch, client_cls=_WeirdClient)
+        result = web_search.invoke({"query": "x"})
+        assert result["results"] == []
+        assert "error" not in result

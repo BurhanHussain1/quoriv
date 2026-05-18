@@ -37,11 +37,16 @@ PROVIDER_ENV_VARS: Final[dict[str, str]] = {
     "openrouter": "OPENROUTER_API_KEY",
     "together": "TOGETHER_API_KEY",
     "vllm": "VLLM_API_KEY",
+    # Phase 3 Slice 7: Tavily backs the ``web_search`` tool. Not a
+    # model provider per se, but the key-resolution flow is the same
+    # (env var first, then keychain) so we register it here.
+    "tavily": "TAVILY_API_KEY",
 }
 """Provider name -> environment variable consulted as a key source.
 
 Providers absent from this map (e.g. ``ollama``) typically run locally and
-do not require an API key.
+do not require an API key. Search backends that need keys (Tavily) also
+live here.
 """
 
 

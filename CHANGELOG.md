@@ -518,6 +518,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 677 → 688** (+11). All gates green.
 
+#### Phase 3 Slice 7 — `web_search` tool (Tavily backend)
+- `quoriv.tools.web.web_search(query, max_results, include_domains, exclude_domains)` — new `@tool` that hits Tavily's LLM-friendly search API and returns ranked result snippets. Each result row is normalised to `{title, url, content, score}` — Tavily's heavier `raw_content` field is intentionally dropped so the list stays compact in the agent's context.
+- **Defensive everywhere**: the `tavily-python` SDK lives in a new `[search]` install extra. A user without the extra still gets a working session; the tool just returns `{"error": "Tavily SDK not installed (...)..", "query": ...}`. Same shape if the `TAVILY_API_KEY` is missing or if the upstream API raises — the agent should be able to recover instead of dying mid-turn.
+- `quoriv.config.keychain.PROVIDER_ENV_VARS` gains a `tavily → TAVILY_API_KEY` entry. Key resolution flows through the existing `get_api_key("tavily")` helper (env var first, then keychain) — same precedence as the model providers.
+- `pyproject.toml` adds a new `[search]` install extra: `search = ["tavily-python>=0.7.0"]`. CI install lines in `test.yml` and the mypy job in `lint.yml` add `search` to the extras: `pip install -e ".[dev,ast,mcp,anthropic,ollama,gemini,search]"`. The `tavily.*` module pattern is added to mypy's `ignore_missing_imports` overrides since the SDK ships without `py.typed`.
+- `quoriv.tools.__init__` re-exports `web_search` and registers it as the 13th entry in `QUORIV_TOOLS`.
+- **Annotation note**: the tool's `include_domains` / `exclude_domains` use `list[str] | None` rather than `Sequence[str] | None`. LangChain's `@tool` decorator evaluates annotations at runtime via `get_type_hints()`, so `Sequence` (importable only from `collections.abc`) would either need to live at module top-level *and* draw a `ruff TC003` warning, or sit under `TYPE_CHECKING` *and* break tool registration. `list` is a builtin, which sidesteps both problems.
+- 7 new tests in `tests/unit/tools/test_web.py`:
+  - `TestWebSearchMissingKey` (1) — empty env + empty keychain produces a structured error dict (not an exception), and the error string names `TAVILY_API_KEY`.
+  - `TestWebSearchHappyPath` (4) — env-var key resolves and returns normalised results; keychain fallback when env is unset (`fake_keyring` captures the key the fake client was constructed with); `max_results` forwards; `include_domains` + `exclude_domains` forward through to the SDK call.
+  - `TestWebSearchFailure` (2) — Tavily client raising at search time becomes `{"error": "Search failed: ..."}`; non-dict responses from the SDK fall through to an empty `results` list (defensive guard against weirdly shaped upstream returns).
+  - Existing `TestToolSurface::test_registered_in_quoriv_tools` extended to also assert `web_search` is in `QUORIV_TOOLS`.
+
+**Test count: 688 → 695** (+7). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -534,7 +549,11 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **`web_search`** — picks a backend (Tavily, Brave, SerpAPI, …) and wraps it as a Quoriv tool
+- **Themes** (light / dark / custom)
+- **Hooks system** (pre-tool / post-tool / on-message subscribers)
+- **Replay mode** (rerun a past session for debugging)
+- **Fallback chains** (Anthropic → OpenAI → Ollama on transient failure)
+- **Eval harness** (small task set for regression catching)
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers
 - **Replay mode:** rerun a past session for debugging

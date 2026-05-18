@@ -1,10 +1,9 @@
-"""Web tools exposed to the agent — Phase 3 Slice 6.
+"""Web tools exposed to the agent — Phase 3 Slices 6 + 7.
 
-Phase 3 Slice 6 ships ``web_fetch`` — a small wrapper around
+Phase 3 Slice 6 shipped ``web_fetch`` — a small wrapper around
 :mod:`httpx` that lets the agent pull text from a URL during a turn.
-A future slice adds ``web_search`` once we pick a backend (Tavily,
-SerpAPI, Brave, …); doing the fetch tool first keeps this slice
-self-contained and free of new API-key dependencies.
+Phase 3 Slice 7 adds ``web_search`` backed by Tavily — an
+LLM-friendly search API with a free tier.
 
 Design notes:
 
@@ -13,21 +12,26 @@ Design notes:
   agent's ``ToolExecutor`` will run this in a thread pool if it
   needs to.
 * **Size-bounded output.** A 50 MB HTML page would blow the model's
-  context window. ``max_chars`` truncates the returned text with an
-  explicit ``"… (truncated, +N chars)"`` marker so the agent knows
-  more content exists.
+  context window. ``web_fetch``'s ``max_chars`` truncates with an
+  explicit ``"… (truncated, +N chars)"`` marker.
 * **Best-effort decoding.** ``httpx`` picks the encoding from the
-  response's ``Content-Type`` header. We forward whatever it picks
-  rather than guessing.
-* **No JS rendering.** This is plain HTTP — the agent can't fetch
-  pages that need JS to render. A separate slice could wire a
-  headless browser if needed.
+  response's ``Content-Type`` header. We forward whatever it picks.
+* **No JS rendering.** Plain HTTP — pages that need JS won't render.
+
+``web_search`` requires the ``[search]`` install extra so the
+``tavily-python`` SDK is available, and a ``TAVILY_API_KEY``
+configured via env var or keychain. When the SDK isn't installed
+or the key is missing, the tool returns a structured error dict
+(matching ``web_fetch``'s contract) rather than raising — the
+agent should be able to recover and try a different approach.
 """
 
 from __future__ import annotations
 
 import httpx
 from langchain_core.tools import tool
+
+from quoriv.config.keychain import PROVIDER_ENV_VARS, get_api_key
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 """Maximum time to wait for the response. Generous so slow servers
@@ -98,3 +102,103 @@ def web_fetch(url: str, max_chars: int = _DEFAULT_MAX_CHARS) -> dict[str, object
         "truncated": truncated,
         "url": str(response.url),
     }
+
+
+# ---------------------------------------------------------------------------
+# web_search — Phase 3 Slice 7
+# ---------------------------------------------------------------------------
+
+
+_TAVILY_PROVIDER = "tavily"
+_DEFAULT_SEARCH_RESULTS = 5
+"""Default number of results to return per ``web_search`` call.
+
+Five is the sweet spot for chat-style usage: enough to triangulate a
+question, few enough that the result list stays readable in the
+context window. The agent can request more via ``max_results``.
+"""
+
+
+def _summarize_tavily_result(item: dict[str, object]) -> dict[str, object]:
+    """Normalise one Tavily result row into the shape Quoriv returns.
+
+    Tavily returns each hit with ``title`` / ``url`` / ``content`` /
+    ``score`` plus optional ``raw_content``. We surface the first four
+    — agents care most about the snippet + URL — and skip the heavier
+    fields so the result list stays compact.
+    """
+    return {
+        "title": item.get("title"),
+        "url": item.get("url"),
+        "content": item.get("content"),
+        "score": item.get("score"),
+    }
+
+
+@tool
+def web_search(
+    query: str,
+    max_results: int = _DEFAULT_SEARCH_RESULTS,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> dict[str, object]:
+    """Search the web via Tavily and return ranked result snippets.
+
+    Args:
+        query: The natural-language search query.
+        max_results: Number of results to return. Defaults to 5;
+            Tavily caps at 20 per call.
+        include_domains: Optional allow-list of domains. When set,
+            only hits from these domains come back.
+        exclude_domains: Optional deny-list of domains.
+
+    Returns:
+        A dict with:
+
+            ``query``    The original query echoed back.
+            ``results``  List of ``{title, url, content, score}``
+                         dicts, ranked best-first.
+
+        On any error (missing key, missing SDK, API failure), the
+        dict has ``"error"`` set to a short human-readable message
+        and no ``results`` field — same convention as
+        :func:`web_fetch` and the git tools.
+    """
+    # Defensive import: ``tavily-python`` lives in the ``[search]``
+    # install extra. A user without the extra still gets a working
+    # session — just a structured error from this tool.
+    try:
+        from tavily import TavilyClient  # noqa: PLC0415  (intentional lazy import)
+    except ImportError as exc:
+        return {
+            "error": (
+                f"Tavily SDK not installed ({exc}). "
+                f"Install Quoriv with the [search] extra to enable web_search."
+            ),
+            "query": query,
+        }
+
+    api_key = get_api_key(_TAVILY_PROVIDER)
+    if not api_key:
+        env_var = PROVIDER_ENV_VARS[_TAVILY_PROVIDER]
+        return {
+            "error": (
+                f"No Tavily API key found. Set ${env_var} or run 'quoriv config set tavily'."
+            ),
+            "query": query,
+        }
+
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(
+            query=query,
+            max_results=max_results,
+            include_domains=list(include_domains) if include_domains else None,
+            exclude_domains=list(exclude_domains) if exclude_domains else None,
+        )
+    except Exception as exc:  # tavily uses bespoke exception types
+        return {"error": f"Search failed: {exc}", "query": query}
+
+    raw_results = response.get("results", []) if isinstance(response, dict) else []
+    results = [_summarize_tavily_result(item) for item in raw_results if isinstance(item, dict)]
+    return {"query": query, "results": results}

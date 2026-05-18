@@ -21,9 +21,9 @@ Modules:
     tests       Slice 6 ships ``run_tests`` — auto-detects pytest / npm /
                 cargo / go from marker files and runs the suite, returning
                 structured pass/fail metadata.
-    web         Slice 6 (Phase 3) ships ``web_fetch`` for HTTP-based
-                page retrieval. ``web_search`` lands in a later slice
-                once the backend is chosen.
+    web         Phase 3 Slice 6 ships ``web_fetch`` for HTTP-based
+                page retrieval; Slice 7 adds ``web_search`` backed
+                by Tavily (requires the ``[search]`` install extra).
 
 What's **not** here, and why:
 
@@ -48,7 +48,7 @@ from quoriv.tools.git import (
     git_status,
 )
 from quoriv.tools.tests import run_tests
-from quoriv.tools.web import web_fetch
+from quoriv.tools.web import web_fetch, web_search
 
 QUORIV_TOOLS = [
     find_symbol,
@@ -63,6 +63,7 @@ QUORIV_TOOLS = [
     git_stash,
     run_tests,
     web_fetch,
+    web_search,
 ]
 """Default Quoriv-specific tools handed to ``create_deep_agent(tools=...)``."""
 
@@ -80,4 +81,5 @@ __all__ = [
     "go_to_definition",
     "run_tests",
     "web_fetch",
+    "web_search",
 ]
