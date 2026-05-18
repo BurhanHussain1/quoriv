@@ -503,6 +503,21 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 669 → 677** (+8). All gates green. All 6 Phase 3 providers (Anthropic, Ollama, Gemini, vLLM, OpenRouter, plus the pre-existing OpenAI) are now wired.
 
+#### Phase 3 Slice 6 — `web_fetch` tool
+- `quoriv.tools.web` — new module shipping `web_fetch(url, max_chars)`: a small `@tool` that wraps `httpx.Client.get` so the agent can pull text from a URL during a turn. Returns a structured dict (`status_code`, `content_type`, `text`, `truncated`, `url`) on success or `{"error": ..., "url": ...}` on network failure — mirrors the `dict[str, Any]` + `"error"` key contract every other Quoriv tool uses.
+- **Bounded output**: `max_chars` defaults to 10_000 (~2.5-3k tokens) — enough for most pages without blowing the model's context window. Larger bodies get truncated with an explicit `"… (truncated, +N chars)"` marker so the agent knows more content exists. Pages at the exact cap are *not* marked truncated.
+- **Defensive**: `httpx.HTTPError` (covers connect failures, DNS, timeouts, redirect-cap exceeded) is caught and turned into the error dict — a bad URL never propagates an exception up through the tool call. `follow_redirects=True` and `timeout=30s` are baked in.
+- **Sync**, not async — matches every other Quoriv tool. The agent's `ToolExecutor` runs it in a thread pool if needed.
+- Registered as the 12th entry in `QUORIV_TOOLS`. `quoriv.tools.__init__` re-exports `web_fetch`.
+- `web_search` is intentionally deferred to a later slice — picking the search backend (Tavily, Brave, SerpAPI, …) deserves its own scope; shipping the fetch tool first keeps this slice self-contained and free of new API-key dependencies.
+- 11 new tests in `tests/unit/tools/test_web.py`:
+  - `TestWebFetchHappyPath` (4) — expected dict keys, short body untouched, `status_code` + `content_type` round-trip, URL forwarded to the client.
+  - `TestTruncation` (3) — body past cap truncated with `+N chars` marker, body at exact cap *not* truncated, default cap applies when not specified.
+  - `TestNetworkFailure` (2) — `httpx.ConnectError` and `httpx.ReadTimeout` both surface as error dicts with the URL preserved and no `text`/`status_code` fields.
+  - `TestToolSurface` (2) — `web_fetch` lives in `QUORIV_TOOLS` so the agent sees it; description mentions "fetch" + "url" so the model can route to it.
+
+**Test count: 677 → 688** (+11). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -519,7 +534,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Web tools:** `web_search`, `web_fetch`
+- **`web_search`** — picks a backend (Tavily, Brave, SerpAPI, …) and wraps it as a Quoriv tool
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers
 - **Replay mode:** rerun a past session for debugging
