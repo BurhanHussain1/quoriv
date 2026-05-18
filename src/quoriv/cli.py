@@ -16,11 +16,13 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
-from rich.console import Console
 from rich.table import Table
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 from quoriv import __version__
 from quoriv.config import (
@@ -48,12 +50,21 @@ app.add_typer(config_app)
 
 
 def _console() -> Console:
-    """Return a fresh Rich console.
+    """Return a fresh Rich console honoring the configured theme.
 
     Returning a fresh instance per call rather than using a module-level
     singleton keeps tests from picking up output captured between cases.
+    Theme resolution (Phase 3 Slice 8) reads ``config.ui.theme`` — lazy
+    import to avoid loading the full config tree on commands that don't
+    need it (e.g. ``quoriv version``).
     """
-    return Console()
+    from quoriv.ui.themes import make_console  # noqa: PLC0415  (intentional lazy import)
+
+    try:
+        theme = load_config().ui.theme
+    except Exception:  # pragma: no cover  # malformed config — fall back
+        theme = "auto"
+    return make_console(theme)
 
 
 # ---------------------------------------------------------------------------

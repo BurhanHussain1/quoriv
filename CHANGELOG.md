@@ -533,6 +533,19 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 688 → 695** (+7). All gates green.
 
+#### Phase 3 Slice 8 — Themes (light / dark / auto)
+- `quoriv.ui.themes` — new module exposing three palettes for the `config.ui.theme` setting that's been on the schema since Phase 0 Day 2 but until now never propagated past the doctor table. `make_console(theme)` returns a configured `rich.console.Console`; `resolve_theme(name)` collapses `auto` to a concrete `dark` / `light` based on the terminal's `$COLORFGBG` background hint (indexes 7 and 15 = light); `RICH_THEMES["dark"]` is explicitly `None` so the factory has no special-case branch for "use Rich defaults".
+- **Palette content kept small on purpose**: the only Rich styles overridden by `light` are `dim` (Rich's default low-contrast grey on dark becomes near-invisible on white — bumped to `grey39`) and `panel.border` (cyan washes out on light, switched to `blue`). Inline color tags like `[green]ok[/green]` and `[red]err[/red]` keep their Rich-default rendering because their contrast holds across both backgrounds.
+- `quoriv.app.run_chat` and `quoriv.cli._console` now call `make_console(config.ui.theme)` instead of bare `Console()`. The CLI helper wraps the lazy `load_config` call in `try/except` so a malformed config still gets a working console (falls back to `auto`).
+- The plain `from rich.console import Console` imports in `app.py` and `cli.py` move into `TYPE_CHECKING` blocks now that the runtime entry point is `make_console` — Console is only used as a type annotation in both files, so the runtime import is dead weight (`ruff TC002`).
+- 19 new tests in `tests/unit/ui/test_themes.py`:
+  - `TestPaletteMap` (2) — `dark` is explicitly `None`, `light` is a real `rich.theme.Theme` instance.
+  - `TestLightBackgroundDetection` (5) — no `$COLORFGBG` → no light detection; `0;7` and `0;15` → light; `15;0` / `15;1` / `15;8` → not light; malformed values fall through; a single field without the `fg;bg` shape isn't enough signal.
+  - `TestResolveTheme` (4) — `dark` and `light` round-trip; `auto` resolves to `light` with the light-bg env var, `dark` without it.
+  - `TestMakeConsole` (5) — `dark` returns a plain Console; `light` carries the grey `dim` override (verified by reading the style off the resolved Console); `auto` without signal falls through to dark; `force_terminal=False` kwarg forwards; an unknown theme name silently falls back to defaults rather than crashing.
+
+**Test count: 695 → 714** (+19). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -549,7 +562,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Themes** (light / dark / custom)
 - **Hooks system** (pre-tool / post-tool / on-message subscribers)
 - **Replay mode** (rerun a past session for debugging)
 - **Fallback chains** (Anthropic → OpenAI → Ollama on transient failure)

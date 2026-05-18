@@ -36,7 +36,6 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
-from rich.console import Console
 from rich.panel import Panel
 
 from quoriv import __version__
@@ -76,6 +75,7 @@ from quoriv.ui import (
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
     from langgraph.checkpoint.base import BaseCheckpointSaver
+    from rich.console import Console
 
     from quoriv.config import QuorivConfig
 
@@ -147,7 +147,13 @@ async def run_chat(
         cwd: Repository root for the agent's filesystem and shell.
             Defaults to ``Path.cwd()``.
     """
-    console = Console()
+    # Phase 3 Slice 8: theme resolved from ``config.ui.theme``
+    # (``dark`` / ``light`` / ``auto``). ``auto`` checks
+    # ``$COLORFGBG`` and falls through to ``dark`` when the
+    # terminal doesn't advertise a background.
+    from quoriv.ui.themes import make_console  # noqa: PLC0415  (lazy import)
+
+    console = make_console(config.ui.theme)
     model_id = model_override or config.model.default
 
     if mode not in ALLOWED_MODES:
