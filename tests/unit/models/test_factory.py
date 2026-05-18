@@ -20,6 +20,10 @@ class TestListProviders:
     def test_openai_registered_in_phase_1(self) -> None:
         assert "openai" in list_providers()
 
+    def test_anthropic_registered_in_phase_3(self) -> None:
+        # Phase 3 Slice 1 wired Anthropic into the factory.
+        assert "anthropic" in list_providers()
+
     def test_results_sorted(self) -> None:
         providers = list_providers()
         assert providers == sorted(providers)

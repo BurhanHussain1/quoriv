@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 # Lazy so importing this module is cheap.
 _PROVIDERS: dict[str, str] = {
     "openai": "quoriv.models.openai:build",
+    "anthropic": "quoriv.models.anthropic:build",
     # Phase 3 additions (uncomment when implemented):
-    # "anthropic":  "quoriv.models.anthropic:build",
     # "gemini":     "quoriv.models.gemini:build",
     # "ollama":     "quoriv.models.ollama:build",
     # "vllm":       "quoriv.models.vllm:build",

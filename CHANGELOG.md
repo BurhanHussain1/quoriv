@@ -432,6 +432,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 611 → 638** (+27). All gates green. **Phase 2 is complete.**
 
+#### Phase 3 Slice 1 — Anthropic provider
+- `quoriv.models.anthropic` — new provider module mirroring `quoriv.models.openai`. Builds a `langchain_anthropic.ChatAnthropic` instance with `model=spec.name`, resolves the API key through `quoriv.config.keychain.get_api_key("anthropic")` (env var `ANTHROPIC_API_KEY` first, then OS keychain), raises `MissingAPIKeyError` with the correct env-var name when both are absent. Requires the `[anthropic]` install extra.
+- `quoriv.models.factory._PROVIDERS` registers `anthropic`. `list_providers()` now returns `["anthropic", "openai"]` (sorted). The four remaining Phase 3 providers (Gemini / Ollama / vLLM / OpenRouter) stay commented out — they ship in later slices.
+- CI install line in `.github/workflows/test.yml` and the mypy job in `.github/workflows/lint.yml` add `anthropic` to the extras: `pip install -e ".[dev,ast,mcp,anthropic]"`. Same pattern as the Slice 6 fix that pulled in `[mcp]` — keeps the test suite and mypy able to import the new provider's deps.
+- 7 new tests:
+  - `tests/unit/models/test_anthropic.py::TestMissingKey` (1) — provider + env-var name on the raised `MissingAPIKeyError`.
+  - `tests/unit/models/test_anthropic.py::TestBuildFromEnv` (1) — `ANTHROPIC_API_KEY` env var → `ChatAnthropic` with the model name preserved.
+  - `tests/unit/models/test_anthropic.py::TestBuildFromKeyring` (1) — keychain fallback works when env is unset.
+  - `tests/unit/models/test_anthropic.py::TestIdentifierShapes` (1) — modern dash-versioned ids like `anthropic:claude-opus-4-7` flow through `ModelSpec.parse` unchanged.
+  - `tests/unit/models/test_anthropic.py::TestKwargsForwarded` (2) — `temperature` and `max_tokens` forwarded to the underlying `ChatAnthropic` (with `max_tokens_to_sample` fallback for older lib versions).
+  - `tests/unit/models/test_factory.py::TestListProviders::test_anthropic_registered_in_phase_3` (1) — sanity that the factory dispatch picks it up.
+
+**Test count: 638 → 645** (+7). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -447,8 +461,14 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 3 — kickoff)
-- Phase 2 is complete. Phase 3 (multi-provider + polish — Anthropic, Gemini, Ollama, vLLM, OpenRouter, web tools, hooks, replay mode) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+### Coming next (Phase 3 — remaining slices)
+- **Providers:** Ollama (local, no API key), Gemini, vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
+- **Web tools:** `web_search`, `web_fetch`
+- **Themes:** light / dark / custom
+- **Hooks system:** pre-tool / post-tool / on-message subscribers
+- **Replay mode:** rerun a past session for debugging
+- **Fallback chains:** Anthropic → OpenAI → Ollama on transient failure
+- **Eval harness:** small task set for regression catching
 
 ---
 
