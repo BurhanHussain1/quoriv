@@ -7,9 +7,9 @@ to catch typos early.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PermissionMode = Literal["read-only", "ask", "auto", "yolo"]
 """Permission posture for tool execution.
@@ -154,6 +154,85 @@ class SubAgentRoleConfig(BaseModel):
     )
 
 
+class MCPServerConfig(BaseModel):
+    """One MCP (Model Context Protocol) server connection — Phase 2 Slice 6.
+
+    Two transports are supported, distinguished by ``transport``:
+
+        ``stdio``   Launch the server as a subprocess and talk over
+                    its stdin/stdout. ``command`` is required;
+                    ``args``/``env`` are optional.
+        ``sse``     Connect to a long-lived HTTP/SSE endpoint.
+                    ``url`` is required; ``headers`` is optional.
+
+    Fields outside the active transport are ignored at runtime but
+    rejected at validation time (``extra="forbid"``) so a typo in the
+    server config fails loudly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["stdio", "sse"] = Field(
+        default="stdio",
+        description="Transport for the MCP server connection.",
+    )
+    command: str | None = Field(
+        default=None,
+        description="Executable to launch (stdio transport only).",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Command-line arguments for the stdio executable.",
+    )
+    env: dict[str, str] | None = Field(
+        default=None,
+        description="Environment variables to set for the stdio subprocess.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="HTTP(S) endpoint URL (sse transport only).",
+    )
+    headers: dict[str, str] | None = Field(
+        default=None,
+        description="Headers to send on the SSE connection (e.g. auth tokens).",
+    )
+
+    @model_validator(mode="after")
+    def _validate_transport_fields(self) -> Self:
+        if self.transport == "stdio":
+            if not self.command:
+                raise ValueError("stdio transport requires 'command'")
+            if self.url is not None or self.headers is not None:
+                raise ValueError("stdio transport forbids 'url' / 'headers' — those are sse-only")
+        elif self.transport == "sse":
+            if not self.url:
+                raise ValueError("sse transport requires 'url'")
+            if self.command is not None or self.args or self.env is not None:
+                raise ValueError(
+                    "sse transport forbids 'command' / 'args' / 'env' — those are stdio-only"
+                )
+        return self
+
+
+class MCPConfig(BaseModel):
+    """MCP server registry — Phase 2 Slice 6.
+
+    Keys are user-supplied server names; values are
+    :class:`MCPServerConfig`. The agent loads tools from every
+    registered server at session start and merges them into the
+    main ``tools=`` list. Tool names are kept distinct using each
+    server's name as a prefix (handled by
+    ``langchain-mcp-adapters``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    servers: dict[str, MCPServerConfig] = Field(
+        default_factory=dict,
+        description="Map of server-name to MCPServerConfig.",
+    )
+
+
 class PluginsConfig(BaseModel):
     """Third-party plugin enable/disable — Phase 2 Slice 5.
 
@@ -226,3 +305,4 @@ class QuorivConfig(BaseModel):
     cost: CostConfig = Field(default_factory=CostConfig)
     subagents: SubAgentsConfig = Field(default_factory=SubAgentsConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)

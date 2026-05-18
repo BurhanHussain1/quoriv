@@ -50,6 +50,33 @@ theme = "dark"
 disabled = []
 
 
+# [mcp.servers.NAME]
+# Phase 2 Slice 6: external MCP (Model Context Protocol) servers.
+# Each registered server's tools are merged into the agent's tools
+# list at session start. Requires the [mcp] install extra:
+#
+#     pip install 'quoriv[mcp]'
+#
+# Two transports are supported:
+#
+#   transport = "stdio"   Launch the server as a subprocess. Needs
+#                         `command` and optionally `args`/`env`.
+#   transport = "sse"     Long-lived HTTP/SSE endpoint. Needs `url`
+#                         and optionally `headers` (e.g. bearer tokens).
+#
+# Example — connect to the `fetch` reference server (stdio) and a
+# hypothetical GitHub MCP server (sse):
+#
+# [mcp.servers.fetch]
+# command = "uvx"
+# args    = ["mcp-server-fetch"]
+#
+# [mcp.servers.github]
+# transport = "sse"
+# url       = "https://mcp.github.example.com"
+# headers   = { Authorization = "Bearer ${GITHUB_MCP_TOKEN}" }
+
+
 # [plugins]
 # Phase 2 Slice 5: third-party tool plugins. A plugin is a Python
 # package that registers an entry point under the `quoriv.plugins`

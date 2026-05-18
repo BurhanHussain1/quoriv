@@ -82,6 +82,7 @@ ast = [
 # MCP plugin support (Phase 2)
 mcp = [
     "mcp>=1.0.0",
+    "langchain-mcp-adapters>=0.2.0",
 ]
 
 # Additional model providers (Phase 3)

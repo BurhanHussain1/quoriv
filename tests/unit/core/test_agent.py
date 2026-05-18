@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from langchain_core.tools import tool
 
 from quoriv.config import load_config
 from quoriv.core.agent import build_agent
@@ -154,6 +155,32 @@ class TestBuildAgentMemoryWiring:
         memory = captured.get("memory")
         assert isinstance(memory, list)
         assert any("memory.md" in entry for entry in memory)
+
+    def test_extra_tools_appended_to_tool_list(
+        self,
+        fake_home: Path,
+        fake_keyring: dict[tuple[str, str], str],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        # Phase 2 Slice 6: the new ``extra_tools`` arg should land at
+        # the end of the agent's tool list (after QUORIV_TOOLS and any
+        # plugin tools). MCP tools flow through here from the async
+        # chat loop.
+        @tool
+        def _mcp_like(_x: str) -> str:
+            """Stand-in MCP-flavored tool."""
+            return _x
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        captured: dict[str, object] = {}
+        self._stub_factory(monkeypatch, captured)
+        cfg = load_config()
+        build_agent(cfg, cwd=tmp_path, extra_tools=[_mcp_like])
+        tools = captured.get("tools")
+        assert isinstance(tools, list)
+        # The extra tool is present, and at the *end* (post QUORIV_TOOLS).
+        assert tools[-1] is _mcp_like
 
     def test_memory_arg_ordered_global_then_project(
         self,

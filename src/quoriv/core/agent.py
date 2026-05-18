@@ -57,6 +57,7 @@ def build_agent(
     cwd: Path | None = None,
     mode: PermissionMode = "ask",
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    extra_tools: list[Any] | None = None,
 ) -> Any:  # create_deep_agent's deeply generic return type isn't worth pinning
     """Construct a configured DeepAgent for a chat session.
 
@@ -72,6 +73,11 @@ def build_agent(
         checkpointer: Optional LangGraph checkpointer. Defaults to a fresh
             in-memory ``MemorySaver``. Required for ``interrupt_on`` to
             work, so we always supply at least one.
+        extra_tools: Additional tools to append to the agent's tool list,
+            after ``QUORIV_TOOLS`` and the entry-point plugin tools.
+            Phase 2 Slice 6 uses this for MCP-discovered tools — they're
+            loaded asynchronously in :func:`quoriv.app.run_chat` before
+            ``build_agent`` is called (which stays sync).
 
     Returns:
         The compiled DeepAgent graph. Drive it with
@@ -105,11 +111,16 @@ def build_agent(
     # ``QUORIV_TOOLS``. Disabled plugins are skipped. Broken plugins
     # are logged and dropped — they never break a session.
     plugin_tools = discover_plugin_tools(disabled=config.plugins.disabled)
+    # Phase 2 Slice 6: caller-supplied extras (typically MCP tools
+    # loaded via ``quoriv.plugins.mcp.load_mcp_tools`` from the async
+    # chat loop). Append last so user-facing tools shadow built-ins
+    # only by explicit name — handy if users want to override one.
+    extras = list(extra_tools) if extra_tools else []
 
     return create_deep_agent(
         model=model,
         backend=backend,
-        tools=[*QUORIV_TOOLS, *plugin_tools],
+        tools=[*QUORIV_TOOLS, *plugin_tools, *extras],
         middleware=[PathProtectionMiddleware(list(PATH_PROTECTION))],
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_on=interrupt_on or None,

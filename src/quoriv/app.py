@@ -160,6 +160,15 @@ async def run_chat(
     sessions_db = db_path(cwd_path)
     registry = SessionRegistry.for_cwd(cwd_path)
 
+    # Phase 2 Slice 6: load MCP tools (if any servers are configured)
+    # before building the agent. Done here in the async ``run_chat``
+    # rather than inside ``build_agent`` because ``build_agent`` is
+    # sync — and so are the live ``/mode`` rebuilds, which reuse the
+    # same ``extra_tools`` list captured here.
+    from quoriv.plugins.mcp import load_mcp_tools  # noqa: PLC0415  (lazy import)
+
+    extra_tools = await load_mcp_tools(config.mcp.servers)
+
     async with AsyncSqliteSaver.from_conn_string(str(sessions_db)) as saver:
         try:
             agent = build_agent(
@@ -168,6 +177,7 @@ async def run_chat(
                 cwd=cwd_path,
                 mode=permission_mode,
                 checkpointer=saver,
+                extra_tools=extra_tools,
             )
         except MissingAPIKeyError as exc:
             _render_missing_key(console, exc)
@@ -188,6 +198,7 @@ async def run_chat(
             config=config,
             model_override=model_override,
             checkpointer=saver,
+            extra_tools=extra_tools,
         )
 
 
@@ -203,6 +214,7 @@ async def _interactive_loop(
     config: QuorivConfig | None = None,
     model_override: str | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    extra_tools: list[Any] | None = None,
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits.
 
@@ -281,6 +293,7 @@ async def _interactive_loop(
                         cwd=cwd,
                         mode=new_mode,
                         checkpointer=checkpointer,
+                        extra_tools=extra_tools,
                     )
                 permission_mode = new_mode
                 console.print(

@@ -411,6 +411,27 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 592 → 611** (+19). All gates green.
 
+#### Phase 2 Slice 6 — MCP client (Model Context Protocol)
+- `quoriv.config.schema.MCPServerConfig` (+`MCPConfig`) — new sections. Each server picks a transport (`stdio` or `sse`, default `stdio`) and the per-transport fields: `command`/`args`/`env` for stdio, `url`/`headers` for sse. A `model_validator` enforces both the "required field per transport" rule (`stdio` needs `command`; `sse` needs `url`) and the "no cross-transport fields" rule — a stdio server with a `url` is clearly a typo and fails loudly. `extra="forbid"` throughout. Added to `QuorivConfig` as the `mcp` section, with `mcp.servers: dict[str, MCPServerConfig]` keyed by user-supplied server name.
+- `quoriv.plugins.mcp.client` — new module. `load_mcp_tools(servers)` is an async loader: translates each `MCPServerConfig` into the connection dict shape `langchain_mcp_adapters.client.MultiServerMCPClient` expects, instantiates the client, and calls `await client.get_tools()`. The lazy import for `langchain_mcp_adapters` is wrapped in `try/except ImportError` so users without the `[mcp]` install extra get a logged warning and an empty list rather than a hard crash. Every other failure path (client construction, `get_tools()`) is also caught + logged + returns `[]` — defensive throughout, same pattern as the entry-point plugin loader.
+- `quoriv.plugins.mcp.__init__` re-exports `load_mcp_tools`.
+- `quoriv.core.agent.build_agent` gained a keyword-only `extra_tools: list[Any] | None = None` parameter. The tools list passed to `create_deep_agent` is now `[*QUORIV_TOOLS, *plugin_tools, *extra_tools]` — MCP-discovered tools land last so any future tool-shadow rule (a user override) stays explicit by position.
+- `quoriv.app.run_chat` calls `await load_mcp_tools(config.mcp.servers)` before constructing the agent and threads the result through `_interactive_loop` → `build_agent` *and* the live `/mode`-rebuild call path. The async load happens in `run_chat` (the only async point in the chat startup) precisely because `build_agent` stays sync.
+- `pyproject.toml` `[mcp]` install extra adds `langchain-mcp-adapters>=0.2.0` alongside the existing `mcp>=1.0.0`.
+- `config.example.toml` documents the new `[mcp.servers.NAME]` blocks with both stdio and sse worked examples (the reference `mcp-server-fetch` stdio server and a hypothetical GitHub SSE endpoint with a bearer token).
+- 27 new tests:
+  - `tests/unit/plugins/test_mcp_schema.py::TestMCPServerConfigStdio` (5) — minimal stdio, args + env, default transport, missing `command` rejected, cross-transport `url` rejected.
+  - `tests/unit/plugins/test_mcp_schema.py::TestMCPServerConfigSse` (4) — minimal sse, headers, missing `url` rejected, cross-transport `command` rejected.
+  - `tests/unit/plugins/test_mcp_schema.py::TestMCPServerConfigStrict` (2) — `extra="forbid"` and unknown transport rejection.
+  - `tests/unit/plugins/test_mcp_schema.py::TestMCPConfig` (4) — empty default; `QuorivConfig.mcp.servers == {}` round-trip; mixed stdio + sse servers map round-trip; `extra="forbid"` at the `MCPConfig` level.
+  - `tests/unit/plugins/test_mcp_client.py::TestConnectionDict` (5) — stdio minimal, env included when set, env *omitted* (not `None`) when not set, sse minimal, headers included when set.
+  - `tests/unit/plugins/test_mcp_client.py::TestLoadMcpToolsEdgeCases` (2) — empty servers map → empty list (fast-path, no import); missing `langchain-mcp-adapters` (simulated by monkeypatching `builtins.__import__`) → logged warning + empty list.
+  - `tests/unit/plugins/test_mcp_client.py::TestLoadMcpToolsHappyPath` (2) — monkeypatched `MultiServerMCPClient` captures the translated connection dict (verifies fetch stdio + github sse round-trip correctly); discovered tools flow back through.
+  - `tests/unit/plugins/test_mcp_client.py::TestLoadMcpToolsFailures` (2) — `MultiServerMCPClient.__init__` raising → empty list; `await client.get_tools()` raising → empty list.
+  - `tests/unit/core/test_agent.py::TestBuildAgentMemoryWiring::test_extra_tools_appended_to_tool_list` (1) — `extra_tools` lands at the end of the tools list passed to `create_deep_agent` (after `QUORIV_TOOLS` and plugin tools). This is the same `create_deep_agent` capture pattern used for the memory tests.
+
+**Test count: 611 → 638** (+27). All gates green. **Phase 2 is complete.**
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -426,8 +447,8 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 2 — remaining slices)
-- **MCP client:** `quoriv.plugins.mcp` over stdio + SSE transports
+### Coming next (Phase 3 — kickoff)
+- Phase 2 is complete. Phase 3 (multi-provider + polish — Anthropic, Gemini, Ollama, vLLM, OpenRouter, web tools, hooks, replay mode) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ---
 
