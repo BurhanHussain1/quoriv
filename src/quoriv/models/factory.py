@@ -33,8 +33,8 @@ _PROVIDERS: dict[str, str] = {
     "anthropic": "quoriv.models.anthropic:build",
     "ollama": "quoriv.models.ollama:build",
     "gemini": "quoriv.models.gemini:build",
+    "vllm": "quoriv.models.vllm:build",
     # Phase 3 additions (uncomment when implemented):
-    # "vllm":       "quoriv.models.vllm:build",
     # "openrouter": "quoriv.models.openrouter:build",
 }
 

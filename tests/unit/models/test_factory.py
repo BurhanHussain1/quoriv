@@ -32,6 +32,10 @@ class TestListProviders:
         # Phase 3 Slice 3 wired Google Gemini in.
         assert "gemini" in list_providers()
 
+    def test_vllm_registered_in_phase_3(self) -> None:
+        # Phase 3 Slice 4 wired vLLM (OpenAI-compatible local servers).
+        assert "vllm" in list_providers()
+
     def test_results_sorted(self) -> None:
         providers = list_providers()
         assert providers == sorted(providers)

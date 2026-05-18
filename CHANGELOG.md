@@ -472,6 +472,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 652 → 659** (+7). All gates green.
 
+#### Phase 3 Slice 4 — vLLM provider (OpenAI-compatible)
+- `quoriv.models.vllm` — new provider module. vLLM serves an OpenAI-compatible HTTP API, so under the hood the provider builds a `langchain_openai.ChatOpenAI` instance pointed at the user's vLLM endpoint via `base_url`. No extra SDK needed (uses the OpenAI SDK already in core deps).
+- **Defaults that match local-first deployment:**
+  - `base_url`: explicit kwarg > `$VLLM_BASE_URL` env var > `http://localhost:8000/v1` (the vLLM server's default OpenAI-compatible endpoint).
+  - `api_key`: explicit kwarg > `$VLLM_API_KEY` env (already in `PROVIDER_ENV_VARS`) > keychain > placeholder `"EMPTY"`. Unlike OpenAI / Anthropic / Gemini, vLLM **never** raises `MissingAPIKeyError` — most local vLLM deployments don't enforce auth and `ChatOpenAI` accepts any string as `api_key`, so falling through to a placeholder keeps the provider building cleanly. The keychain map already lists `vllm`.
+- `quoriv.models.factory._PROVIDERS` registers `vllm`. `list_providers()` now returns `["anthropic", "gemini", "ollama", "openai", "vllm"]` (sorted).
+- No CI extras change needed — vLLM uses the OpenAI SDK already in the core dependency list.
+- 10 new tests:
+  - `tests/unit/models/test_vllm.py::TestDefaults` (3) — returns `ChatOpenAI` with model preserved; default base_url applied when nothing is configured; placeholder `"EMPTY"` api_key when neither env nor keychain has one (read via `SecretStr.get_secret_value()` since LangChain stores it secret-style).
+  - `tests/unit/models/test_vllm.py::TestEnvVarPrecedence` (3) — `$VLLM_BASE_URL` overrides the built-in default; `$VLLM_API_KEY` is honored; keychain wins when env is absent.
+  - `tests/unit/models/test_vllm.py::TestKwargOverrides` (2) — explicit `base_url=` kwarg beats `$VLLM_BASE_URL`; explicit `api_key=` kwarg beats `$VLLM_API_KEY`.
+  - `tests/unit/models/test_vllm.py::TestKwargsForwarded` (1) — additional kwargs like `temperature` flow through to `ChatOpenAI`.
+  - `tests/unit/models/test_factory.py::TestListProviders::test_vllm_registered_in_phase_3` (1) — factory dispatch picks it up.
+
+**Test count: 659 → 669** (+10). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -488,7 +504,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Providers:** vLLM, OpenRouter — each mirrors the Anthropic / OpenAI provider shape
+- **Provider:** OpenRouter — mirrors the Anthropic / OpenAI provider shape
 - **Web tools:** `web_search`, `web_fetch`
 - **Themes:** light / dark / custom
 - **Hooks system:** pre-tool / post-tool / on-message subscribers
