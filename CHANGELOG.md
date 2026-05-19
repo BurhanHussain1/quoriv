@@ -652,6 +652,26 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 786 → 804** (+18). All gates green.
 
+#### Phase 4 Slice 4 — MkDocs documentation site
+- `mkdocs.yml` — `mkdocs-material` config with light/dark palette toggle, navigation features (instant, tracking, top-button, sections), search, code-copy buttons, and "Edit this page" → GitHub. Plugins: `search`, `include-markdown`, `mkdocstrings[python]` (pointed at `src/`). Markdown extensions cover admonitions, code highlighting, tables, tabbed blocks, task lists, footnotes, and pymdownx emoji.
+- `docs/index.md`, `docs/changelog.md`, `docs/contributing.md`, `docs/security.md`, `docs/project-plan.md` — thin shims that pull `README.md` / `CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `PROJECT_PLAN.md` from the repo root via `{% include-markdown %}` blocks. Avoids duplicating content; root files stay canonical for GitHub viewers.
+- `docs/architecture.md` — short intro + includes the existing `docs/DEEPAGENTS_REFERENCE.md` so the architecture reference is available in the rendered site.
+- `not_in_nav: DEEPAGENTS_REFERENCE.md` — silences the orphaned-file warning for the reference doc, which is consumed via include-markdown rather than linked directly.
+- `.github/workflows/docs.yml` — GitHub Pages deploy workflow:
+  - Triggers on push to `main` (path-filtered to docs / source / root markdown) + `workflow_dispatch`.
+  - **`build` job** — installs `docs` extras + the include-markdown plugin, runs `mkdocs build`, uploads the rendered `site/` directory as a Pages artifact via `actions/upload-pages-artifact@v3`.
+  - **`deploy` job** — gated to `refs/heads/main`, uses `actions/deploy-pages@v4` with OIDC (`pages: write` + `id-token: write`). Bound to the `github-pages` environment so the URL is surfaced on the workflow page.
+  - Non-strict build for now — included root files carry pre-existing relative links (`../PROJECT_PLAN.md`, `../LICENSE`) that MkDocs flags as warnings. Site renders correctly; tightening to `--strict` happens once those links are rewritten to be site-aware.
+- `pyproject.toml [project.optional-dependencies.docs]` — added `mkdocs-include-markdown-plugin>=6.2.0` so `pip install -e ".[docs]"` produces a working `mkdocs build`.
+- 24 new tests in `tests/unit/test_docs_setup.py`:
+  - `TestMkdocsConfig` (6) — file exists, `site_name`, `repo_url` / `edit_uri`, material theme, `include-markdown` plugin enabled, `search` plugin enabled. A custom `SafeLoader` subclass stubs out `!!python/name:` tags so the test runs without mkdocs-material being installed.
+  - `TestNavStructure` (2 + 6 parametrized) — nav present, core pages mapped, every nav target resolves to an actual file under `docs/`.
+  - `TestDocsWorkflow` (9) — workflow file present, triggers on `main` push + `workflow_dispatch`, has `pages: write` + `id-token: write` + `contents: read`, runs `mkdocs build`, uploads pages artifact via `actions/upload-pages-artifact`, deploys via `actions/deploy-pages`, deploy gated to `main`, targets the `github-pages` environment.
+  - `TestPyprojectDocsGroup` (1) — `mkdocs-include-markdown-plugin` and `mkdocs-material` are listed in the `docs` extra.
+- **One-time setup before first deploy** — repo Settings → Pages → Source: "GitHub Actions". After that, every push to `main` updates <https://burhanhussain1.github.io/quoriv/>.
+
+**Test count: 804 → 828** (+24). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -669,7 +689,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 4 — kickoff)
 - Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
-- **MkDocs documentation site** — `mkdocs-material`, `mkdocs.yml` + `docs/` tree fed by README + CHANGELOG, gh-pages deploy.
 - **PyInstaller binaries** — single-file binaries for Windows / macOS / Linux.
 - **Telemetry backend** — wire a real sink (PostHog or self-hosted) behind the existing `is_enabled` gate.
 - **v1.0.0 tag + announcement** — once the release pipeline, docs, and binaries are in place.

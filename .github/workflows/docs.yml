@@ -1,0 +1,85 @@
+name: docs
+
+# Documentation site — built with MkDocs Material on every push to main
+# and deployed to GitHub Pages via the official `actions/deploy-pages`
+# action (uses OIDC, no PAT required).
+#
+# One-time setup: enable Pages on the repo (Settings → Pages → Source:
+# "GitHub Actions"). After that, every push to main updates
+# https://burhanhussain1.github.io/quoriv/.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mkdocs.yml"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "PROJECT_PLAN.md"
+      - ".github/workflows/docs.yml"
+      - "src/**"
+  workflow_dispatch:
+
+# Cancel in-flight builds for the same ref so only the latest commit
+# publishes. Allow concurrent runs across refs (e.g. a release tag
+# building docs while main builds).
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]" mkdocs-include-markdown-plugin
+
+      - name: Build site
+        # Non-strict for now: included root files (README, CHANGELOG, ...)
+        # carry relative links that mkdocs treats as warnings. The site
+        # renders fine; we'll tighten to --strict once those links are
+        # site-aware.
+        run: mkdocs build
+
+      - name: Upload built site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    # Only deploy from main — manual dispatches on other branches build
+    # for verification but don't publish.
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
