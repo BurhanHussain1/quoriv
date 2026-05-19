@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quoriv"
-version = "1.0.0"
+version = "1.0.1"
 description = "Open-source terminal AI coding agent with multi-model support (OpenAI, Anthropic, Gemini, Ollama, vLLM)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,21 +43,25 @@ classifiers = [
 # Core runtime dependencies (Phase 1 baseline)
 # --------------------------------------------------------------------------
 dependencies = [
-    # Agent runtime
-    "deepagents>=0.0.1",
-    "langchain>=0.3.0",
-    "langgraph>=0.2.0",
-    "langgraph-checkpoint-sqlite>=2.0.0",
-    "langchain-openai>=0.2.0",
+    # Agent runtime. Upper bounds matter here — deepagents 0.7 moved
+    # `LocalShellBackend` and broke our import path; the LangChain
+    # ecosystem has historically shipped breaking changes at major
+    # bumps. We test against the windows below.
+    "deepagents>=0.6.1,<0.7.0",
+    "langchain>=1.0,<2.0",
+    "langchain-core>=1.0,<2.0",
+    "langgraph>=1.0,<2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0,<3.0",
+    "langchain-openai>=1.0,<2.0",
 
     # Terminal UI
     "rich>=13.7.0",
     "prompt_toolkit>=3.0.43",
-    "typer>=0.12.0",
+    "typer>=0.12.0,<1.0",
 
     # Config + data
-    "pydantic>=2.7.0",
-    "pydantic-settings>=2.3.0",
+    "pydantic>=2.7.0,<3.0",
+    "pydantic-settings>=2.3.0,<3.0",
     "keyring>=25.0.0",
     "aiosqlite>=0.20.0",
 
@@ -85,19 +89,21 @@ mcp = [
     "langchain-mcp-adapters>=0.2.0",
 ]
 
-# Additional model providers (Phase 3)
-anthropic = ["langchain-anthropic>=0.2.0"]
-gemini = ["langchain-google-genai>=2.0.0"]
-ollama = ["langchain-ollama>=0.2.0"]
+# Additional model providers (Phase 3). Upper bounds match the core
+# langchain pin window — keeps provider-package majors aligned with
+# the langchain-core we tested against.
+anthropic = ["langchain-anthropic>=1.0,<2.0"]
+gemini = ["langchain-google-genai>=4.0,<5.0"]
+ollama = ["langchain-ollama>=1.0,<2.0"]
 
 # Web tools (Phase 3 Slice 7) — Tavily backs ``web_search``.
-search = ["tavily-python>=0.7.0"]
+search = ["tavily-python>=0.7.0,<1.0"]
 
 # Bundle of all providers
 all-providers = [
-    "langchain-anthropic>=0.2.0",
-    "langchain-google-genai>=2.0.0",
-    "langchain-ollama>=0.2.0",
+    "langchain-anthropic>=1.0,<2.0",
+    "langchain-google-genai>=4.0,<5.0",
+    "langchain-ollama>=1.0,<2.0",
 ]
 
 # Development tooling

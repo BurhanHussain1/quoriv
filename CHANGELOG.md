@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.0.1] — 2026-05-19
+
+### Fixed
+
+- **Dependency drift on fresh installs.** `pyproject.toml` originally pinned `deepagents>=0.0.1` and the LangChain ecosystem with open upper bounds. A fresh `pip install quoriv==1.0.0` therefore resolved `deepagents 0.7+`, which moved `LocalShellBackend` out of `deepagents.backends`, and `quoriv chat` crashed at import time with `ImportError: cannot import name 'LocalShellBackend' from 'deepagents.backends'`.
+- Tightened all agent-runtime pins to the version windows v1.0 was actually tested against:
+  - `deepagents>=0.6.1,<0.7.0`
+  - `langchain>=1.0,<2.0`, `langchain-core>=1.0,<2.0`, `langgraph>=1.0,<2.0`, `langgraph-checkpoint-sqlite>=2,<3`, `langchain-openai>=1.0,<2.0`
+  - Provider extras (`anthropic`, `gemini`, `ollama`) and the `all-providers` bundle now carry matching major-version caps.
+  - `pydantic>=2.7,<3.0`, `pydantic-settings>=2.3,<3.0`, `typer>=0.12,<1.0` — same rationale, lower blast radius.
+- No code changes; this is purely a dependency-constraint hotfix. `quoriv chat` boots cleanly on `pip install quoriv==1.0.1` from a fresh interpreter.
+
+---
+
 ## [1.0.0] — 2026-05-19
 
 First stable release. The project crossed feature-complete at the end of Phase 4: full chat / TUI loop, six model providers (OpenAI, Anthropic, Gemini, Ollama, vLLM, OpenRouter), permission modes with HITL, AST + git + tests + web tools, MCP + Python plugins, hooks, replay viewer, eval harness with runner + CLI, opt-in telemetry with HTTP backend, tag-triggered PyPI release pipeline (OIDC trusted publishing), cross-platform PyInstaller binaries, and an mkdocs-material documentation site.
