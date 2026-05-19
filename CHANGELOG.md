@@ -592,6 +592,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 730 → 739** (+9). All gates green.
 
+#### Phase 3 Slice 13 — Eval harness foundation
+- `quoriv.eval` — new module shipping the pure scoring layer for a regression eval suite:
+  - `EvalCase(name, prompt, expected_substrings)` — one prompt + the substrings the agent's final response must contain.
+  - `EvalResult(case_name, passed, failed_substrings, output)` — what scoring produces.
+  - `score_case(case, output) -> EvalResult` — pure function. Each expected substring must appear in the output (case-sensitive, unanchored). A case with no expectations always passes (smoke-test mode).
+  - `summarize(results) -> {"total", "passed", "failed"}` and `passed_fraction(results) -> float` for CI thresholds.
+  - `SAMPLE_CASES` — three minimal sanity cases (echo a distinctive token, basic arithmetic, file:line citation format) using assertions distinctive enough that random LLM drift is very unlikely to satisfy them by accident.
+- **Scope note**: this slice ships the scoring + bundled cases only. The runner that drives each case through `_drive_turn` against a chosen model is a follow-up — the scoring layer is a complete, foundational unit on its own. Builds on the stubbed-LLM integration pattern shipped in Phase 1 Slice 9b.
+- 16 new tests in `tests/unit/test_eval.py`:
+  - `TestScoreCase` (5) — all substrings present passes; one missing fails with that substring listed; case-sensitive matching (`"Hello"` vs `"hello"`); empty expectations always pass (smoke mode); unanchored substring match.
+  - `TestSummarize` (3) — empty / all-passing / mixed result lists.
+  - `TestPassedFraction` (4) — empty is 1.0 (vacuous), all-pass / all-fail / half-pass.
+  - `TestSampleCases` (4) — bundle non-empty; every case carries name + prompt + expectations; case names are unique (lookups don't collide); the assertions are *satisfiable* (synthetic outputs hitting each case's substrings pass).
+
+**Test count: 739 → 755** (+16). All gates green. **Phase 3 is feature-complete** — runner / CLI for the eval harness can ship as a follow-up enhancement.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -607,8 +623,9 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
-### Coming next (Phase 3 — remaining slices)
-- **Eval harness** (small task set for regression catching)
+### Coming next (Phase 4 — kickoff)
+- Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+- **Eval-harness runner** — wire `score_case` into a runner that drives each `EvalCase` through `_drive_turn` against a chosen model, plus a `quoriv eval` CLI. Foundational scoring layer + sample cases shipped in Slice 13; runner is a separable follow-up.
 - **Eval harness:** small task set for regression catching
 
 ---
