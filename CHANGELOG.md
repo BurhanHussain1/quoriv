@@ -636,6 +636,22 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 768 → 786** (+18). All gates green.
 
+#### Phase 4 Slice 3 — Release CI workflow
+- `.github/workflows/release.yml` — tag-triggered release pipeline:
+  - **`build` job** — checks out the repo, installs `build` + `twine`, verifies the pushed tag matches `project.version` in `pyproject.toml` (a stale tag now fails loudly instead of publishing the wrong artifact), builds wheel + sdist via `python -m build` (hatchling backend), validates the dists with `twine check`, and uploads them as a `dist` artifact.
+  - **`publish` job** — `needs: build`, gated to `push` events on `refs/tags/v*` so a `workflow_dispatch` build doesn't accidentally publish. Uses `pypa/gh-action-pypi-publish@release/v1` with **OIDC trusted publishing** (`permissions: id-token: write`) — no PyPI API token is stored in repo secrets. Bound to the `pypi` deployment environment so manual approval can be required before each release.
+  - **`github-release` job** — downloads the `dist` artifact and attaches the wheel + sdist to the GitHub release page via `softprops/action-gh-release@v2`, auto-generating release notes from the changelog and commit history.
+- Trigger: `push` on tags matching `v*.*.*` (semver only). `workflow_dispatch` is also wired so the build job can be smoke-tested without cutting a tag.
+- 18 new tests in `tests/unit/test_release_workflow.py`:
+  - `TestWorkflowFile` (2) — file exists, parses as YAML with the right `name`.
+  - `TestTriggers` (2) — triggers on `v*.*.*` tags, supports `workflow_dispatch`. Handles PyYAML's quirk of mapping the bare `on:` key to Python `True`.
+  - `TestBuildJob` (5) — build job exists, uses `python -m build`, validates with `twine check`, verifies tag matches `pyproject.toml` version, uploads the dist artifact.
+  - `TestPublishJob` (6) — publish job exists, has `id-token: write` for OIDC, uses `pypa/gh-action-pypi-publish`, `needs: build`, gated to tag pushes (won't publish from `workflow_dispatch`), targets the `pypi` environment.
+  - `TestGithubReleaseJob` (3) — exists, uses `softprops/action-gh-release`, has `contents: write`.
+- **One-time setup before first release** — configure trusted publisher on PyPI at <https://pypi.org/manage/account/publishing/> binding the (repository, workflow name, environment) triple. After that, every `git tag v… && git push --tags` ships a release.
+
+**Test count: 786 → 804** (+18). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -653,7 +669,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 4 — kickoff)
 - Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
-- **Release CI workflow** — `.github/workflows/release.yml` on tag push: hatchling-built wheel + sdist, PyPI publish via `pypa/gh-action-pypi-publish` + OIDC trusted publishing (no API token in secrets).
 - **MkDocs documentation site** — `mkdocs-material`, `mkdocs.yml` + `docs/` tree fed by README + CHANGELOG, gh-pages deploy.
 - **PyInstaller binaries** — single-file binaries for Windows / macOS / Linux.
 - **Telemetry backend** — wire a real sink (PostHog or self-hosted) behind the existing `is_enabled` gate.

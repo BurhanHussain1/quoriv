@@ -1,0 +1,129 @@
+name: release
+
+# Tag-triggered release pipeline.
+#
+# Builds the wheel + sdist with hatchling (via pypa/build) and publishes
+# to PyPI through `pypa/gh-action-pypi-publish` using OIDC "trusted
+# publishing" — no PyPI API token is stored in repo secrets. The
+# publishing identity is bound to (repository, workflow, environment)
+# pairs on PyPI side: configure the trusted publisher at
+# https://pypi.org/manage/account/publishing/ before the first release.
+#
+# Tag convention: `vMAJOR.MINOR.PATCH` (e.g. `v1.0.0`). The build job
+# verifies the tag matches `project.version` in pyproject.toml so a
+# stale tag can't accidentally publish the wrong version.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Verify tag matches pyproject version
+        id: version
+        # On workflow_dispatch there is no tag — skip the match but
+        # still surface the pyproject version for the build step.
+        run: |
+          version=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::Tag '${GITHUB_REF_NAME}' does not match pyproject version 'v${version}'."
+              exit 1
+            fi
+            echo "Tag '${GITHUB_REF_NAME}' matches pyproject version 'v${version}'."
+          fi
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Validate distributions with twine
+        run: python -m twine check dist/*
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish on tag push — workflow_dispatch builds for smoke
+    # testing but does not push to PyPI.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/quoriv/${{ needs.build.outputs.version }}
+    permissions:
+      # OIDC trusted publishing — PyPI verifies this token instead of
+      # an API key. https://docs.pypi.org/trusted-publishers/
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # Default index is PyPI; `print-hash` writes the published
+          # file hashes to the workflow log for audit.
+          print-hash: true
+
+  github-release:
+    name: Attach artifacts to GitHub Release
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
