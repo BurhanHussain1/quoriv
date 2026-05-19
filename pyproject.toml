@@ -118,6 +118,12 @@ docs = [
     "mkdocs-include-markdown-plugin>=6.2.0",
 ]
 
+# Single-file binary builds (PyInstaller). Used by
+# .github/workflows/binaries.yml on tag push to produce per-OS releases.
+binary = [
+    "pyinstaller>=6.10.0",
+]
+
 # --------------------------------------------------------------------------
 # Entry point: `quoriv` on the command line
 # --------------------------------------------------------------------------

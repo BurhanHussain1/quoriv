@@ -1,0 +1,102 @@
+name: binaries
+
+# Cross-platform single-file binaries via PyInstaller.
+#
+# Triggers:
+#   - tag push (v*.*.*) — full release; builds attach to the GitHub
+#     release as downloadable assets.
+#   - workflow_dispatch — manual smoke build, uploaded as workflow
+#     artifacts only.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+concurrency:
+  group: binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: quoriv-linux-x86_64
+            binary: quoriv
+          - os: macos-latest
+            artifact: quoriv-macos-arm64
+            binary: quoriv
+          - os: windows-latest
+            artifact: quoriv-windows-x86_64.exe
+            binary: quoriv.exe
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package + binary extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[binary,ast,mcp,anthropic,ollama,gemini,search]"
+
+      - name: Build binary
+        run: pyinstaller pyinstaller.spec --clean --noconfirm
+
+      - name: Rename binary to per-OS artifact name
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/quoriv.exe "out/${{ matrix.artifact }}"
+          else
+            cp dist/quoriv "out/${{ matrix.artifact }}"
+            chmod +x "out/${{ matrix.artifact }}"
+          fi
+
+      - name: Smoke-test binary (version)
+        shell: bash
+        run: |
+          "./out/${{ matrix.artifact }}" version
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+
+  attach-to-release:
+    name: Attach binaries to GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only attach on tag pushes — manual dispatches stop at the
+    # workflow-artifact stage.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-binaries
+          merge-multiple: true
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-binaries/*
+          fail_on_unmatched_files: true

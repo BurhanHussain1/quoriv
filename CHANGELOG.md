@@ -672,6 +672,29 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 804 → 828** (+24). All gates green.
 
+#### Phase 4 Slice 5 — PyInstaller binaries
+- `pyinstaller.spec` — spec file used by `pyinstaller pyinstaller.spec` (CI invokes this on each matrix runner):
+  - Entry point: `src/quoriv/__main__.py` with `pathex=["src"]` so the `quoriv` package resolves under PyInstaller's bootloader.
+  - Explicit `hiddenimports` for every provider module under `quoriv.models.*` — they're loaded via `importlib.import_module` in `quoriv.models.factory` and the static analyser doesn't see them. Also lists the LangChain provider packages each one imports from (`langchain_openai`, `langchain_anthropic`, `langchain_google_genai`, `langchain_ollama`) plus `langchain.agents.factory` and `langchain_anthropic.middleware.prompt_caching` (DeepAgents pulls these in dynamically).
+  - `collect_submodules` covers `quoriv` + `langchain` + `langchain_core` + `langgraph` + `deepagents` so chains / tracers / hub modules that evade analysis still ship.
+  - `excludes`: pytest / mypy / ruff / mkdocs — dev-only stuff that shouldn't bloat the binary.
+  - `upx=False` deliberately — UPX-packed Windows binaries get flagged by Defender SmartScreen.
+- `.github/workflows/binaries.yml` — cross-platform release pipeline:
+  - Triggers on `v*.*.*` tag pushes (release path) and `workflow_dispatch` (manual smoke build).
+  - **`build` job** — 3-row matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`) with `artifact` + `binary` columns so the smoke / upload steps stay declarative. Installs `binary` extra + runtime provider extras, runs `pyinstaller pyinstaller.spec --clean --noconfirm`, renames the produced binary to a per-OS name (`quoriv-linux-x86_64`, `quoriv-macos-arm64`, `quoriv-windows-x86_64.exe`), smoke-tests it by invoking `version`, and uploads as a workflow artifact.
+  - **`attach-to-release` job** — `needs: build`, gated to `push` events on `refs/tags/v*`. Downloads all three matrix artifacts and attaches them to the GitHub release via `softprops/action-gh-release@v2`. Manual dispatches stop at the workflow-artifact stage so a smoke build never accidentally publishes.
+- `pyproject.toml [project.optional-dependencies.binary]` — new extra installing `pyinstaller>=6.10.0`. `pip install -e ".[binary,…]"` is now enough to build a binary locally.
+- 23 new tests in `tests/unit/test_binaries_workflow.py`:
+  - `TestSpecFile` (6) — exists, entrypoint, `collect_submodules("quoriv")`, every provider listed in hiddenimports, `console=True`, `upx=False`.
+  - `TestWorkflowTriggers` (2) — `v*.*.*` tag push + `workflow_dispatch`.
+  - `TestBuildMatrix` (3 + 3 parametrized) — every OS present, each matrix row names `artifact` + `binary`, Windows row carries `.exe` suffix.
+  - `TestBuildSteps` (4) — installs `binary` extra, invokes `pyinstaller pyinstaller.spec`, smoke-tests the binary with `version`, uploads per-OS artifact.
+  - `TestAttachToRelease` (5) — job exists, `needs: build`, gated to tag pushes, `contents: write`, uses `softprops/action-gh-release`.
+  - `TestPyprojectBinaryExtra` (1) — pyinstaller appears in the `binary` extra.
+- First release run will likely surface platform-specific missing hidden imports; expect a short iteration loop after tagging `v0.1.0-rc1` to refine the spec before `v1.0.0`.
+
+**Test count: 828 → 851** (+23). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -689,7 +712,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 4 — kickoff)
 - Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
-- **PyInstaller binaries** — single-file binaries for Windows / macOS / Linux.
 - **Telemetry backend** — wire a real sink (PostHog or self-hosted) behind the existing `is_enabled` gate.
 - **v1.0.0 tag + announcement** — once the release pipeline, docs, and binaries are in place.
 

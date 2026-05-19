@@ -105,7 +105,12 @@ secrets/
 # Build artifacts
 # ------------------------------------------------------------
 *.spec
+# The PyInstaller spec used by the binaries CI workflow is checked in
+# — every other generated spec stays ignored.
+!pyinstaller.spec
 pyinstaller-build/
+build/
+dist/
 
 # ------------------------------------------------------------
 # Screenshots / scratch (CI debugging, design refs, etc.)
