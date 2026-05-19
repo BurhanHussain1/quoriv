@@ -113,6 +113,58 @@ def chat(
 
 
 @app.command()
+def replay(
+    target: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "Saved session name or raw thread id. Names are resolved "
+                "via the per-cwd session registry; raw ids look up the "
+                "trace file directly."
+            ),
+        ),
+    ],
+    cwd: Annotated[
+        Path | None,
+        typer.Option(
+            "--cwd",
+            help="Repository root holding the .quoriv/traces directory. Defaults to cwd.",
+            file_okay=False,
+            dir_okay=True,
+            exists=True,
+            resolve_path=True,
+        ),
+    ] = None,
+) -> None:
+    """Replay a saved chat session — read-only viewer over the JSONL trace.
+
+    Phase 3 Slice 12: walks ``<cwd>/.quoriv/traces/<thread_id>.jsonl``
+    and prints each event (turn_start / model_complete / tool_start /
+    tool_end / turn_end) with a Rich-formatted prefix. No model is
+    invoked; no tool is executed.
+    """
+    from quoriv.core import SessionRegistry, trace_path  # noqa: PLC0415
+    from quoriv.replay import replay_thread  # noqa: PLC0415
+
+    console = _console()
+    root = cwd if cwd is not None else Path.cwd()
+
+    # First try the registry (name → thread id). Fall back to treating
+    # the input as a raw thread id.
+    registry = SessionRegistry.for_cwd(root)
+    record = registry.load(target)
+    thread_id = record.thread_id if record is not None else target
+    path = trace_path(root, thread_id)
+    rendered = replay_thread(console, path)
+    if rendered == 0 and record is None:
+        console.print(
+            f"[red]No trace found for {target!r}.[/red]  "
+            f"Try [cyan]/load[/cyan] in chat or pass a saved session name."
+        )
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def doctor() -> None:
     """Health check: Python version, config, API keys."""
     console = _console()

@@ -582,6 +582,16 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 730 → 730** (no new tests; wiring-only slice). All gates green.
 
+#### Phase 3 Slice 12 — Replay mode (post-mortem viewer)
+- `quoriv.replay` — new module shipping `replay_thread(console, trace_path)`. Reads a per-thread JSONL trace via `TraceLogger.read_events` and renders each event with a Rich-formatted prefix and short label: `▶` turn_start (with `user_input` + mode), `·` model_complete (with `model` + `input_tokens` + `output_tokens`), `↳` tool_start (with `tool_name` + truncated args), `◀` tool_end (with `tool_name` + truncated output_preview), `■` turn_end. Unknown event kinds fall through to a compact JSON dump so nothing is silently dropped.
+- **Read-only by construction**: no model is invoked, no tool is executed, no permissions are checked. The viewer purely re-renders the JSONL log. Safe to point at any past session, including ones that ran in `yolo` mode against a paid provider.
+- `quoriv replay <name-or-id>` CLI command added. Resolves `<name>` through the per-cwd `SessionRegistry` (the same one `/save` / `/load` use); falls back to treating the argument as a raw thread id when no name matches. `--cwd` override mirrors the `chat` command. Missing-trace path raises `typer.Exit(code=1)` with a friendly nudge so a CI script catches the failure.
+- 9 new tests in `tests/unit/test_replay.py`:
+  - `TestFormatRecord` (6) — one assertion per event kind (turn_start carries `user_input`, model_complete shows token counts, tool_start shows args, tool_end shows preview, turn_end renders minimally, unknown kinds fall back to JSON).
+  - `TestReplayThread` (3) — missing file prints `"No events"` and returns `0`; full trace renders every event with its fingerprint and reports the count in the header; malformed lines mid-file are silently dropped (the `TraceLogger.read_events` contract from Slice 9).
+
+**Test count: 730 → 739** (+9). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -598,7 +608,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Replay mode** (rerun a past session for debugging)
 - **Eval harness** (small task set for regression catching)
 - **Eval harness:** small task set for regression catching
 
