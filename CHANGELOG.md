@@ -654,7 +654,7 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 #### Phase 4 Slice 4 — MkDocs documentation site
 - `mkdocs.yml` — `mkdocs-material` config with light/dark palette toggle, navigation features (instant, tracking, top-button, sections), search, code-copy buttons, and "Edit this page" → GitHub. Plugins: `search`, `include-markdown`, `mkdocstrings[python]` (pointed at `src/`). Markdown extensions cover admonitions, code highlighting, tables, tabbed blocks, task lists, footnotes, and pymdownx emoji.
-- `docs/index.md`, `docs/changelog.md`, `docs/contributing.md`, `docs/security.md`, `docs/project-plan.md` — thin shims that pull `README.md` / `CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `PROJECT_PLAN.md` from the repo root via `{% include-markdown %}` blocks. Avoids duplicating content; root files stay canonical for GitHub viewers.
+- `docs/index.md`, `docs/changelog.md`, `docs/contributing.md`, `docs/security.md`, `docs/project-plan.md` — thin shims that pull `README.md` / `CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `PROJECT_PLAN.md` from the repo root via the include-markdown directive. Avoids duplicating content; root files stay canonical for GitHub viewers.
 - `docs/architecture.md` — short intro + includes the existing `docs/DEEPAGENTS_REFERENCE.md` so the architecture reference is available in the rendered site.
 - `not_in_nav: DEEPAGENTS_REFERENCE.md` — silences the orphaned-file warning for the reference doc, which is consumed via include-markdown rather than linked directly.
 - `.github/workflows/docs.yml` — GitHub Pages deploy workflow:
