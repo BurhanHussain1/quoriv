@@ -558,6 +558,18 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 714 → 720** (+6). All gates green.
 
+#### Phase 3 Slice 10 — Hook registry (foundational)
+- `quoriv.hooks` — new module shipping `HookRegistry`, a tiny in-memory event bus for `pre_tool` / `post_tool` / `on_message` events. Callbacks are stored per-event in registration order, fire sequentially, and a callback that raises has its exception logged via `loguru` and dropped — one broken hook never breaks a turn. The registry is intentionally per-session (constructed once per `run_chat`), not a module-level singleton, so tests get clean isolation.
+- API surface: `register(event, callback)` (rejects unknown event names early so a typo doesn't silently disable instrumentation), `fire(event, **kwargs)` (forwards kwargs to every registered callback), `handlers(event)` (immutable snapshot tuple for `/hooks`-style introspection), `clear()` (test isolation).
+- **Scope note**: this slice ships the registry only. Wiring `_stream_events` to actually fire `pre_tool` / `post_tool` on `on_tool_start` / `on_tool_end` LangGraph events lands in a follow-up — the registry is a complete unit on its own (full test coverage, foundational shape locked in) and the integration is a separable concern that touches the chat-loop plumbing.
+- 10 new tests in `tests/unit/test_hooks.py`:
+  - `TestRegister` (4) — empty registry has no handlers; `register` adds; multiple handlers preserve registration order when fired; unknown event names rejected with a `ValueError` naming the valid set.
+  - `TestFire` (4) — kwargs forward verbatim; firing with no handlers is a silent no-op; firing an unknown event name is silent (programming error in the emitter, not user input); a callback that raises is logged and the remaining handlers still run.
+  - `TestClear` (1) — `clear()` drops handlers across all three events.
+  - `TestHandlersSnapshot` (1) — the returned tuple is a true snapshot; later `register` calls don't retroactively appear in held references.
+
+**Test count: 720 → 730** (+10). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -574,13 +586,9 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Hooks system** (pre-tool / post-tool / on-message subscribers)
+- **Hooks integration** — wire `_stream_events` to fire `pre_tool` / `post_tool` / `on_message` against the per-session `HookRegistry`. Registry shipped in Slice 10; this is the consumer side.
 - **Replay mode** (rerun a past session for debugging)
 - **Eval harness** (small task set for regression catching)
-- **Themes:** light / dark / custom
-- **Hooks system:** pre-tool / post-tool / on-message subscribers
-- **Replay mode:** rerun a past session for debugging
-- **Fallback chains:** Anthropic → OpenAI → Ollama on transient failure
 - **Eval harness:** small task set for regression catching
 
 ---
