@@ -165,6 +165,63 @@ def replay(
 
 
 @app.command()
+def eval(  # Typer command name maps to the user-facing `quoriv eval` subcommand
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="Override the configured default model."),
+    ] = None,
+    cwd: Annotated[
+        Path | None,
+        typer.Option(
+            "--cwd",
+            help="Repository root the agent operates in. Defaults to the current directory.",
+            file_okay=False,
+            dir_okay=True,
+            exists=True,
+            resolve_path=True,
+        ),
+    ] = None,
+) -> None:
+    """Run the bundled eval suite against the configured model.
+
+    Each case in :data:`quoriv.eval.SAMPLE_CASES` is driven through
+    one agent turn in ``yolo`` mode (no HITL prompts) and scored via
+    substring match. Prints a Rich table summarising pass / fail per
+    case and exits non-zero if any case failed.
+    """
+    from quoriv.eval import SAMPLE_CASES, run_suite, summarize  # noqa: PLC0415
+
+    console = _console()
+    cfg = load_config()
+    results = asyncio.run(
+        run_suite(
+            SAMPLE_CASES,
+            config=cfg,
+            cwd=cwd,
+            model_override=model,
+        )
+    )
+
+    table = Table(title="Quoriv eval results")
+    table.add_column("Case", style="bold")
+    table.add_column("Status")
+    table.add_column("Missing")
+    for result in results:
+        status = "[green]pass[/green]" if result.passed else "[red]fail[/red]"
+        missing = ", ".join(result.failed_substrings) if result.failed_substrings else ""
+        table.add_row(result.case_name, status, missing)
+    console.print(table)
+
+    counts = summarize(results)
+    console.print(
+        f"[bold]{counts['passed']}/{counts['total']}[/bold] passed "
+        f"([red]{counts['failed']}[/red] failed)"
+    )
+    if counts["failed"] > 0:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def doctor() -> None:
     """Health check: Python version, config, API keys."""
     console = _console()

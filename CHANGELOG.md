@@ -622,6 +622,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 755 → 768** (+13). All gates green.
 
+#### Phase 4 Slice 2 — Eval-harness runner
+- `quoriv.eval.run_case(case, *, config=None, cwd=None, mode="yolo", model_override=None, agent=None)` — drives one `EvalCase` through `quoriv.app._drive_turn` against a fresh agent (or a caller-supplied one for tests), then extracts the final assistant text from LangGraph state via `agent.aget_state(...)` and feeds it to `score_case`. Per-case `thread_id = f"eval-{case.name}"` keeps cases isolated in the checkpointer. Discards rendered output to an in-memory `Console` so eval runs quiet.
+- `quoriv.eval.run_suite(cases, ...)` — sequential runner over a tuple/list of cases. A per-case exception is captured as a failed `EvalResult` (output = `<error: ...>`, every expected substring marked missing) so one bad case can't poison the rest of the run. Case order preserved in the returned list.
+- `quoriv.eval._final_ai_text(messages)` — walks a LangGraph message list in reverse looking for the latest non-empty `AIMessage`. Handles both string content and the list-of-dict-chunks shape some providers emit. Returns `""` when no suitable message is found (score then reports every expected substring as missing).
+- `quoriv eval [--model] [--cwd]` — new Typer command. Resolves the model from config (with `--model` override), runs `SAMPLE_CASES` via `run_suite`, prints a Rich table summarising pass / fail per case + missing substrings, and exits non-zero if any case failed.
+- 18 new tests in `tests/unit/test_eval_runner.py`:
+  - `TestFinalAIText` (5) — string content, list-of-dict-chunks, skips empty AIMessages, no-AIMessage list, empty list.
+  - `TestRunCase` (5) — passing case, failing case (missing substrings reported), per-case thread id isolation, requires `config` or `agent`, smoke case with empty expectations.
+  - `TestRunSuite` (3) — one result per case in order, per-case exception isolation (stubbed `_drive_turn` raise), empty suite returns empty list.
+  - `TestEvalCLI` (5) — zero exit on all-pass, non-zero exit on any-fail, case names rendered in table, `--model` forwarded as `model_override`, `--cwd` forwarded as resolved Path.
+- Uses the same `GenericFakeChatModel` + `bind_tools` override pattern as `tests/integration/test_e2e_stubbed_chat.py` — no real LLM calls in the test suite.
+
+**Test count: 768 → 786** (+18). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -639,8 +653,11 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 4 — kickoff)
 - Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
-- **Eval-harness runner** — wire `score_case` into a runner that drives each `EvalCase` through `_drive_turn` against a chosen model, plus a `quoriv eval` CLI. Foundational scoring layer + sample cases shipped in Slice 13; runner is a separable follow-up.
-- **Eval harness:** small task set for regression catching
+- **Release CI workflow** — `.github/workflows/release.yml` on tag push: hatchling-built wheel + sdist, PyPI publish via `pypa/gh-action-pypi-publish` + OIDC trusted publishing (no API token in secrets).
+- **MkDocs documentation site** — `mkdocs-material`, `mkdocs.yml` + `docs/` tree fed by README + CHANGELOG, gh-pages deploy.
+- **PyInstaller binaries** — single-file binaries for Windows / macOS / Linux.
+- **Telemetry backend** — wire a real sink (PostHog or self-hosted) behind the existing `is_enabled` gate.
+- **v1.0.0 tag + announcement** — once the release pipeline, docs, and binaries are in place.
 
 ---
 
