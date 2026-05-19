@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quoriv"
-version = "0.0.1"
+version = "1.0.0"
 description = "Open-source terminal AI coding agent with multi-model support (OpenAI, Anthropic, Gemini, Ollama, vLLM)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,7 +26,7 @@ keywords = [
     "ollama",
 ]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",

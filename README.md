@@ -4,7 +4,7 @@
 
 Quoriv is a Python-built coding agent that lives in your terminal and works directly inside your repository. It plans, reads and writes files, runs shell commands, executes tests, searches your codebase, and delegates work to specialized sub-agents — under a permission system you control. It is built on [DeepAgents](https://github.com/langchain-ai/deepagents) and [LangGraph](https://github.com/langchain-ai/langgraph), and works with OpenAI, Anthropic Claude, Google Gemini, Ollama (local), and self-hosted vLLM endpoints.
 
-> **Status:** Pre-alpha. Phase 0 scaffolding in progress. Not yet usable.
+> **Status:** v1.0 released. `pip install quoriv` — see the [docs site](https://burhanhussain1.github.io/quoriv/) for usage.
 
 ---
 

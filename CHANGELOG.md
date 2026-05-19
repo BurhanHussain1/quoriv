@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
-## [Unreleased]
+## [1.0.0] — 2026-05-19
+
+First stable release. The project crossed feature-complete at the end of Phase 4: full chat / TUI loop, six model providers (OpenAI, Anthropic, Gemini, Ollama, vLLM, OpenRouter), permission modes with HITL, AST + git + tests + web tools, MCP + Python plugins, hooks, replay viewer, eval harness with runner + CLI, opt-in telemetry with HTTP backend, tag-triggered PyPI release pipeline (OIDC trusted publishing), cross-platform PyInstaller binaries, and an mkdocs-material documentation site.
 
 ### Added
 
