@@ -608,6 +608,20 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 739 → 755** (+16). All gates green. **Phase 3 is feature-complete** — runner / CLI for the eval harness can ship as a follow-up enhancement.
 
+#### Phase 4 Slice 1 — Telemetry opt-in scaffold
+- `quoriv.config.schema.TelemetryConfig(enabled: bool = False, endpoint: str | None = None)` — new top-level config section. Off by default. ``extra="forbid"`` keeps typos from silently flipping the flag. Added to `QuorivConfig` as the `telemetry` section.
+- `quoriv.observability.telemetry` — new module shipping the gating surface for Phase 4 telemetry:
+  - `is_enabled(config)` — returns `True` **only** when the user explicitly opted in. Accepts a full `QuorivConfig`, a bare `TelemetryConfig`, or `None` (always disabled).
+  - `report(event_name, config=None, **fields)` — no-op stub that short-circuits early when telemetry is disabled. When enabled, it logs to loguru at debug level for now — the network sink ships in a follow-up when we pick a backend (Sentry / PostHog / OpenTelemetry / self-hosted).
+- **No backend, no transmission.** Users who flip the flag in `config.toml` won't see traffic; the contract is "your opt-in is captured and respected; nothing transmits yet". When the backend lands, the gating check is already in place at every future call site.
+- `quoriv.observability.__init__` re-exports `telemetry_enabled` and `telemetry_report` so emitters can `from quoriv.observability import telemetry_report` without reaching into the submodule.
+- 13 new tests in `tests/unit/observability/test_telemetry.py`:
+  - `TestTelemetryConfigDefaults` (5) — `enabled=False` by default, `endpoint=None` by default, `QuorivConfig.telemetry` exposes the section with safe defaults, explicit opt-in round-trips through `model_validate`, extra fields rejected.
+  - `TestIsEnabled` (4) — `None` config returns False, default config returns False, explicit `enabled=True` returns True, accepts a bare `TelemetryConfig` (callers that drilled down).
+  - `TestReport` (4) — disabled config emits no log; `None` config no-ops without raising; enabled config doesn't raise (loguru sink is implementation detail); arbitrary structured kwargs accepted (future backend validates at the sink).
+
+**Test count: 755 → 768** (+13). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)

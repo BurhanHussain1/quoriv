@@ -18,6 +18,8 @@ from quoriv.observability.cost import (
     estimate_cost,
     lookup_rate,
 )
+from quoriv.observability.telemetry import is_enabled as telemetry_enabled
+from quoriv.observability.telemetry import report as telemetry_report
 from quoriv.observability.trace import TraceLogger
 
 __all__ = [
@@ -27,4 +29,6 @@ __all__ = [
     "effective_rates",
     "estimate_cost",
     "lookup_rate",
+    "telemetry_enabled",
+    "telemetry_report",
 ]

@@ -164,6 +164,38 @@ class SubAgentRoleConfig(BaseModel):
     )
 
 
+class TelemetryConfig(BaseModel):
+    """Optional outbound telemetry — Phase 4 Slice 1.
+
+    Off by default. Quoriv ships **no telemetry backend** in this
+    slice — the scaffold establishes the config surface and the
+    gating helper (:func:`quoriv.observability.telemetry.is_enabled`)
+    so a future slice can wire a concrete sink (Sentry / PostHog /
+    OpenTelemetry / a self-hosted endpoint) without breaking the
+    public config shape.
+
+    Until a backend lands, ``report()`` is a no-op even when
+    ``enabled=True``. Users who flip the flag now won't see anything
+    leak out of their machine — the contract is "your opt-in is
+    captured and respected; nothing transmits yet".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Opt-in flag. Telemetry is OFF unless this is explicitly set to true in config.toml."
+        ),
+    )
+    endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Optional URL the future telemetry backend will POST to. Ignored until a backend ships."
+        ),
+    )
+
+
 class MCPServerConfig(BaseModel):
     """One MCP (Model Context Protocol) server connection — Phase 2 Slice 6.
 
@@ -316,3 +348,4 @@ class QuorivConfig(BaseModel):
     subagents: SubAgentsConfig = Field(default_factory=SubAgentsConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
