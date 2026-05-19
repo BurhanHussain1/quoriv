@@ -695,6 +695,32 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 828 → 851** (+23). All gates green.
 
+#### Phase 4 Slice 6 — Telemetry backend
+- `quoriv.observability.telemetry.report` now actually transmits when the user has opted in **and** configured an `endpoint`. The Slice 1 stub (debug-log only) is replaced by a sync HTTP POST via `httpx`:
+  - Envelope shape: `{"event": <name>, "fields": {<kwargs>}, "client": {"name": "quoriv", "version": __version__, "platform": sys.platform, "python": "<maj.min>"}, "timestamp": <ISO-8601 UTC>}`.
+  - When `api_key` is set on the config, sent as `Authorization: Bearer <api_key>`. Lets self-hosted sinks distinguish clients.
+  - Timeout is 2 seconds (exported as `_DEFAULT_TIMEOUT`) — a misbehaving sink can stall a chat turn by at most that amount, no matter what.
+  - **Every transport error is swallowed.** `httpx.ConnectError`, DNS failures, 5xx responses, broken TLS — all caught, logged at debug, never re-raised. Telemetry must never break the agent.
+- `quoriv.observability.telemetry._build_envelope` — new pure helper exposing the envelope shape so tests (and any future backend swap) can assert on it without touching the network.
+- `quoriv.observability.telemetry._resolve_telemetry` — internal helper that pulls the bare `TelemetryConfig` out of either a `QuorivConfig` or a leaf `TelemetryConfig`. Keeps `report` symmetrical with `is_enabled` on accepted inputs.
+- `quoriv.config.schema.TelemetryConfig.api_key: str | None = None` — new field for the optional bearer token. `extra="forbid"` is unchanged so a typo (`enabled` → `enable`) still fails validation loudly.
+- Endpoint docstring rewritten — it's no longer "ignored until a backend ships"; it now drives the HTTP transport.
+- **No new dependencies.** `httpx` is already a runtime dep for tool-side use; we reuse it here.
+- 14 new tests in `tests/unit/observability/test_telemetry.py`:
+  - `TestApiKeyField` (2) — default `None`, round-trips through `model_validate`.
+  - `TestBuildEnvelope` (4) — event name + fields preserved, client metadata present, timestamp is ISO-8601 UTC (`+00:00` suffix), envelope is JSON-serialisable.
+  - `TestReportTransport` (8) — uses a `_PostRecorder` callable that monkeypatches `httpx.post` to capture call args without hitting the network:
+    - No endpoint configured → no POST (even when enabled).
+    - Disabled config → no POST (even when endpoint is set).
+    - Enabled + endpoint → POST with correct URL, JSON envelope, `Content-Type` header.
+    - `api_key` set → `Authorization: Bearer <key>` header added.
+    - Timeout is bounded to `_DEFAULT_TIMEOUT` (≤ 5s safety check).
+    - `httpx.ConnectError` swallowed (no re-raise).
+    - 5xx response swallowed (no re-raise).
+    - Bare `TelemetryConfig` accepted directly (no `QuorivConfig` wrapper required).
+
+**Test count: 851 → 865** (+14). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -712,7 +738,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 ### Coming next (Phase 4 — kickoff)
 - Phase 3 is feature-complete. Phase 4 (release polish — MkDocs site, PyPI publish, PyInstaller binaries, CI matrix release pipeline, security policy, telemetry opt-in, `v1.0.0` tag) starts in the next milestone — see [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
-- **Telemetry backend** — wire a real sink (PostHog or self-hosted) behind the existing `is_enabled` gate.
 - **v1.0.0 tag + announcement** — once the release pipeline, docs, and binaries are in place.
 
 ---

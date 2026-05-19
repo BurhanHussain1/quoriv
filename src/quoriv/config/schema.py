@@ -165,19 +165,23 @@ class SubAgentRoleConfig(BaseModel):
 
 
 class TelemetryConfig(BaseModel):
-    """Optional outbound telemetry — Phase 4 Slice 1.
+    """Optional outbound telemetry — Phase 4 Slice 1 + Slice 6.
 
-    Off by default. Quoriv ships **no telemetry backend** in this
-    slice — the scaffold establishes the config surface and the
-    gating helper (:func:`quoriv.observability.telemetry.is_enabled`)
-    so a future slice can wire a concrete sink (Sentry / PostHog /
-    OpenTelemetry / a self-hosted endpoint) without breaking the
-    public config shape.
+    Off by default. When ``enabled=True`` **and** ``endpoint`` is set,
+    :func:`quoriv.observability.telemetry.report` POSTs a small JSON
+    envelope (event name + structured fields + client metadata) to
+    that URL. If ``api_key`` is provided it is sent as
+    ``Authorization: Bearer <api_key>``.
 
-    Until a backend lands, ``report()`` is a no-op even when
-    ``enabled=True``. Users who flip the flag now won't see anything
-    leak out of their machine — the contract is "your opt-in is
-    captured and respected; nothing transmits yet".
+    Any sink that speaks HTTP and accepts JSON works — PostHog's
+    ``/capture/`` endpoint, a self-hosted FastAPI receiver, or a
+    cloud function URL. There is **no hard dependency on a specific
+    provider**.
+
+    Failure mode: telemetry must never break the agent. Transport
+    errors are caught and logged at debug; users who flip the flag
+    against a misbehaving endpoint pay at most one short HTTP timeout
+    per event.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -191,7 +195,15 @@ class TelemetryConfig(BaseModel):
     endpoint: str | None = Field(
         default=None,
         description=(
-            "Optional URL the future telemetry backend will POST to. Ignored until a backend ships."
+            "HTTP(S) URL the report() function POSTs JSON envelopes to. "
+            "When None, telemetry stays silent even with enabled=True."
+        ),
+    )
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional bearer token forwarded as Authorization: Bearer <api_key>. "
+            "Lets self-hosted sinks distinguish clients."
         ),
     )
 
