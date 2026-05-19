@@ -570,6 +570,18 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 
 **Test count: 720 → 730** (+10). All gates green.
 
+#### Phase 3 Slice 11 — Hooks integration (consumer side)
+- `quoriv.app._stream_events` now fires three events against the per-session `HookRegistry` shipped in Slice 10:
+  - `pre_tool` on `on_tool_start` — kwargs: `tool_name`, `args`.
+  - `post_tool` on `on_tool_end` — kwargs: `tool_name`, `output`.
+  - `on_message` on `on_chat_model_end` — kwarg: `message` (the final `AIMessage` from LangChain).
+- `run_chat` constructs one `HookRegistry()` per session and threads it through `_interactive_loop` → `_drive_turn` → `_stream_events` as a new keyword-only `hooks` parameter. All three layers default `hooks` to `None` so existing test entry points (including the Phase 1 Slice 9b stubbed-LLM integration test) keep working unchanged.
+- The registry's defensive `fire()` swallows callback exceptions and logs them — combined with this integration, one broken hook still can't break a turn. The integration adds no failure modes that the registry doesn't already handle.
+- `_stream_events` picked up a `# noqa: PLR0912` because adding three optional hook-fire branches pushed the flat event-kind dispatch from 12 to 15 branches. The function is intentionally a flat switch with one branch per LangGraph event kind, so splitting it would just hide the dispatch.
+- No new tests this slice — the registry has full unit coverage from Slice 10 (10 tests) and the wiring is three mechanical `if hooks is not None: hooks.fire(...)` lines. The existing 730-test suite catches regressions on every other code path that touches `_stream_events`.
+
+**Test count: 730 → 730** (no new tests; wiring-only slice). All gates green.
+
 ### Changed
 
 #### Architecture revision (post-DeepAgents audit)
@@ -586,7 +598,6 @@ Slice 6b (parsed test-count summary from each runner's output) is deferred.
 - `src/quoriv/memory/` subpackage — DeepAgents' `MemoryMiddleware` loads `PROJECT.md` / `~/.quoriv/memory.md` directly via the `memory=[...]` parameter. No custom loader needed.
 
 ### Coming next (Phase 3 — remaining slices)
-- **Hooks integration** — wire `_stream_events` to fire `pre_tool` / `post_tool` / `on_message` against the per-session `HookRegistry`. Registry shipped in Slice 10; this is the consumer side.
 - **Replay mode** (rerun a past session for debugging)
 - **Eval harness** (small task set for regression catching)
 - **Eval harness:** small task set for regression catching

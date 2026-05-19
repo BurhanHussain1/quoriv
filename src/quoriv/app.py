@@ -50,6 +50,7 @@ from quoriv.core import (
     resolve_memory_files,
     trace_path,
 )
+from quoriv.hooks import HookRegistry
 from quoriv.models import MissingAPIKeyError
 from quoriv.observability import (
     ProviderRate,
@@ -205,6 +206,7 @@ async def run_chat(
             model_override=model_override,
             checkpointer=saver,
             extra_tools=extra_tools,
+            hooks=HookRegistry(),
         )
 
 
@@ -221,6 +223,7 @@ async def _interactive_loop(
     model_override: str | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     extra_tools: list[Any] | None = None,
+    hooks: HookRegistry | None = None,
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits.
 
@@ -316,6 +319,7 @@ async def _interactive_loop(
                 permission_mode,
                 tracer=tracer,
                 allowlist=allowlist,
+                hooks=hooks,
             )
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
@@ -730,6 +734,7 @@ async def _drive_turn(
     *,
     tracer: TraceLogger | None = None,
     allowlist: SessionAllowlist | None = None,
+    hooks: HookRegistry | None = None,
 ) -> None:
     """Drive one full user turn end-to-end, handling HITL interrupts.
 
@@ -760,7 +765,7 @@ async def _drive_turn(
     try:
         while True:
             console.print()
-            await _stream_events(console, agent, next_input, run_config, tracer=tracer)
+            await _stream_events(console, agent, next_input, run_config, tracer=tracer, hooks=hooks)
             console.print()
 
             hitl_request = await _pending_hitl_request(agent, run_config)
@@ -779,13 +784,14 @@ async def _drive_turn(
             tracer.log("turn_end", thread_id=thread_id)
 
 
-async def _stream_events(
+async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with optional tracer + hooks fires
     console: Console,
     agent: Any,
     input_payload: Any,
     run_config: RunnableConfig,
     *,
     tracer: TraceLogger | None = None,
+    hooks: HookRegistry | None = None,
 ) -> None:
     """Pump the agent's event stream into the UI.
 
@@ -797,6 +803,13 @@ async def _stream_events(
     When ``tracer`` is supplied, ``model_complete`` (with token usage
     when LangChain provides it), ``tool_start``, and ``tool_end`` events
     are recorded.
+
+    Phase 3 Slice 11: when ``hooks`` is supplied, ``pre_tool`` fires on
+    ``on_tool_start`` (kwargs ``tool_name``, ``args``), ``post_tool`` on
+    ``on_tool_end`` (kwargs ``tool_name``, ``output``), and
+    ``on_message`` on ``on_chat_model_end`` (kwarg ``message`` — the
+    final ``AIMessage`` if LangChain produced one). The registry catches
+    callback exceptions, so a broken hook can never break a turn.
     """
     renderer = StreamRenderer(console)
     try:
@@ -816,6 +829,8 @@ async def _stream_events(
                 renderer.finalize()
                 if tracer is not None:
                     _trace_model_complete(tracer, event)
+                if hooks is not None:
+                    hooks.fire("on_message", message=data.get("output"))
                 continue
 
             if kind == "on_tool_start":
@@ -824,6 +839,8 @@ async def _stream_events(
                 tool_args = data.get("input", {})
                 if tracer is not None:
                     tracer.log("tool_start", tool_name=name, args=tool_args)
+                if hooks is not None:
+                    hooks.fire("pre_tool", tool_name=name, args=tool_args)
                 if name == "edit_file" and isinstance(tool_args, dict):
                     render_edit_diff(
                         console,
@@ -837,12 +854,15 @@ async def _stream_events(
 
             if kind == "on_tool_end":
                 output = data.get("output")
+                tool_name = event.get("name", "?")
                 if tracer is not None:
                     tracer.log(
                         "tool_end",
-                        tool_name=event.get("name", "?"),
+                        tool_name=tool_name,
                         output_preview=_preview(output),
                     )
+                if hooks is not None:
+                    hooks.fire("post_tool", tool_name=tool_name, output=output)
                 render_tool_end(console, output)
                 continue
     finally:
