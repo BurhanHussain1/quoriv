@@ -85,9 +85,7 @@ class TestConstruction:
 
         def _count(app: ChatApp) -> int:
             return sum(
-                1
-                for c in _walk_containers(app.app.layout.container)
-                if isinstance(c, Window)
+                1 for c in _walk_containers(app.app.layout.container) if isinstance(c, Window)
             )
 
         assert _count(app_with_bar) == _count(app_no_bar) + 1

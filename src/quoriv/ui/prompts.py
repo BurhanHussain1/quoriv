@@ -122,9 +122,7 @@ async def prompt_approval(
         # Calls without a ``chat_app`` are typically tests stubbing
         # the function; reject so a misconfigured production call
         # surfaces visibly instead of hanging.
-        console.print(
-            "[red]No interactive UI available — auto-rejecting approval.[/red]"
-        )
+        console.print("[red]No interactive UI available — auto-rejecting approval.[/red]")
         return ApprovalDecision(
             type="reject",
             message="No interactive UI available for approval.",

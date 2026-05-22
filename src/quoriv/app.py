@@ -345,8 +345,7 @@ async def _interactive_loop(
                         )
                     state["permission_mode"] = new_mode
                     ui_console.print(
-                        f"[green]Permission mode switched to[/green] "
-                        f"[cyan]{new_mode}[/cyan]."
+                        f"[green]Permission mode switched to[/green] [cyan]{new_mode}[/cyan]."
                     )
                 continue
 

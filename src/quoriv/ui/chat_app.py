@@ -491,9 +491,7 @@ class ChatApp:
         # implemented as ``ensure_future(run())`` — wrap the result in
         # ``ensure_future`` so mypy sees a Task we can attach a
         # done-callback to.
-        fut = asyncio.ensure_future(
-            _await_in_terminal(lambda: self.app.print_text(ANSI(text)))
-        )
+        fut = asyncio.ensure_future(_await_in_terminal(lambda: self.app.print_text(ANSI(text))))
 
         def _log_exc(f: asyncio.Future[Any]) -> None:
             if f.cancelled():
