@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.2.0] — 2026-05-23
+
+### Added — Phase 5 Slice 2: persistent prompt_toolkit Application
+
+- **`quoriv.ui.chat_app.ChatApp`** — the chat session is now hosted by a single, persistent `prompt_toolkit.Application` that lives for the entire `quoriv chat` invocation, instead of spinning a fresh Application up per input turn. Layout: stream window + bordered input frame + status toolbar, with a `FloatContainer` ready to host modal overlays. Exposes:
+  - `await app.run(driver)` — starts the Application and runs the chat-driver coroutine as a background task; cleans up on either the driver's return or `app.exit()`.
+  - `await app.prompt_input()` — Future-backed input wait. `Enter` resolves it with the buffer contents; `Ctrl+C` / `Ctrl+D` raise `EOFError` (matches `PromptSession` semantics); `Esc-Enter` inserts a newline for multi-line composition.
+  - `push_chunk(text)` / `await finalize_stream()` — feed agent stream tokens into the live `FormattedTextControl` (markdown re-rendered to ANSI on every redraw via Rich) and flush the finished response into terminal scrollback through `run_in_terminal`. No flicker, no duplicate text.
+  - `console` — Rich `Console` whose `file` adapter forwards everything into the Application's scrollback via `app.print_text`. Welcome banners, slash command help, tool diffs, errors — all the existing `console.print(...)` call sites land above the persistent layout without modification.
+  - `await prompt_approval_modal(body_text=...)` — installs a modal `Dialog` Float over the stream + input area, focuses it, and resolves a Future when the user presses `a` (approve) / `r` (reject) / `A` (approve-always) / `Esc` (cancel).
+- **Float-based approval modal** — `quoriv.ui.prompts.prompt_approval` now overlays a modal dialog on the persistent ChatApp instead of opening a separate `PromptSession`. The Rich-rendered "approval required" panel is captured to ANSI via Rich and embedded as the dialog body. Result: the approval prompt no longer steals terminal ownership from the chat UI — the input frame and toolbar stay visible while the user decides.
+- **prompt_toolkit Window-based stream renderer** — `quoriv.ui.stream.StreamRenderer` is now a thin adapter over the ChatApp's stream window. `push(text)` updates the in-window markdown buffer; `await finalize_async()` flushes the rendered text into scrollback and clears the buffer atomically inside `run_in_terminal`. Rich `Live` is gone — no more "Rich finishes → prompt_toolkit takes over" hand-off between agent output and the next user prompt.
+
+### Changed
+
+- `quoriv.app._interactive_loop` builds one `ChatApp` for the whole session and drives it via a `_driver` coroutine spawned inside `chat_app.run(...)`. Mode / thread / agent state migrate into mutable dicts captured by the driver so live `/mode` and `/clear` keep working.
+- `quoriv.app._drive_turn`, `_stream_events`, `_collect_decisions`, and `_handle_slash` accept an optional `chat_app: ChatApp | None` keyword and route streaming + approval through it when supplied. Headless code paths (the e2e stub test) keep working by falling back to direct `console.print(chunk, end="")` of streamed tokens.
+- `/exit` now calls `chat_app.exit()` so `Application.run_async` returns cleanly; `/clear` calls `chat_app.clear_transcript()` (resets the in-flight stream window) instead of emitting a CSI 2J that would have scrolled into the persistent scrollback.
+- `quoriv.ui.__init__` re-exports `ChatApp`; `quoriv.ui.chat_input` re-exports it too so the user's mental model of "the chat_input Application" maps to the new class.
+
+### Removed
+
+- The `PromptSession`-based interactive approval path inside `quoriv.ui.prompts.prompt_approval`. Callers without a `chat_app` now auto-reject with an explanatory message — `auto_deny` (read-only mode) is unaffected.
+- Rich `Live` use inside `StreamRenderer`.
+
+### Tests
+
+- `tests/unit/ui/test_chat_app.py` (new, 10) — construction surfaces, `FloatContainer` present, layout window counts with/without toolbar, keybindings cover Enter / Ctrl-C / Ctrl-D / Esc-Enter, `push_chunk` accumulates, `clear_transcript` resets, lazy `console` proxy, pre-run Rich `print` lands in stream buffer.
+- `tests/unit/ui/test_stream.py` rewritten for the ChatApp wiring — 12 cases covering buffer accumulation, sync/async finalize, ChatApp forwarding, idle-finalize short-circuit.
+- `tests/unit/test_app_decisions.py` — `fake_prompt` stub picks up the new `chat_app=None` kwarg.
+
+**Test count: 892 → 905** (+13). All gates green.
+
+---
+
 ## [1.1.0] — 2026-05-23
 
 ### Added — Phase 5 Slice 1: chat UX polish + bordered input box

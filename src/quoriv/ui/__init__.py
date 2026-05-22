@@ -18,6 +18,7 @@ Modules:
 
 from __future__ import annotations
 
+from quoriv.ui.chat_app import ChatApp
 from quoriv.ui.diff import compute_diff, render_edit_diff
 from quoriv.ui.prompts import (
     READ_ONLY_DENIAL_MESSAGE,
@@ -31,6 +32,7 @@ from quoriv.ui.stream import StreamRenderer
 __all__ = [
     "READ_ONLY_DENIAL_MESSAGE",
     "ApprovalDecision",
+    "ChatApp",
     "DecisionType",
     "StreamRenderer",
     "compute_diff",

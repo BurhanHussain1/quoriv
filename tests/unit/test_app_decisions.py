@@ -52,6 +52,7 @@ def _patch_prompt(
         tool_args: dict[str, Any],
         description: str | None = None,
         auto_deny: bool = False,
+        chat_app: Any = None,  # Slice 2: persistent app passthrough (unused in tests)
     ) -> ApprovalDecision:
         seen.append(tool_name)
         return decision_factory(tool_name)
@@ -159,6 +160,7 @@ class TestCollectDecisionsAllowlist:
             tool_args: dict[str, Any],
             description: str | None = None,
             auto_deny: bool = False,
+            chat_app: Any = None,  # Slice 2: persistent app passthrough (unused in tests)
         ) -> ApprovalDecision:
             calls.append(tool_name)
             return ApprovalDecision(type="approve_always")

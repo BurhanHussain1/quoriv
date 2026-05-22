@@ -64,6 +64,7 @@ from quoriv.permissions import (
 from quoriv.tools import QUORIV_TOOLS
 from quoriv.ui import (
     ApprovalDecision,
+    ChatApp,
     StreamRenderer,
     prompt_approval,
     render_edit_diff,
@@ -223,6 +224,13 @@ async def _interactive_loop(
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits.
 
+    Phase 5 Slice 2 (v1.2.0): the chat session is hosted by a single
+    persistent :class:`ChatApp` Application. The ``console`` argument
+    is now only used as a fallback for pre-existing tests that drive
+    ``_interactive_loop`` directly — production callers (``run_chat``)
+    let the ChatApp's own console redirect into the persistent UI's
+    scrollback.
+
     Slice 8b: ``config``, ``model_override`` and ``checkpointer`` are
     captured so ``/mode <name>`` can rebuild the compiled agent in
     place via :func:`quoriv.core.build_agent` while reusing the same
@@ -238,105 +246,124 @@ async def _interactive_loop(
     # silently un-promote them).
     allowlist = SessionAllowlist()
 
+    # Mutable state captured in the toolbar closure — Python closures
+    # resolve names at call time, so the bottom toolbar always reflects
+    # the *current* thread and permission mode.
+    state: dict[str, Any] = {
+        "thread_id": thread_id,
+        "permission_mode": permission_mode,
+    }
+
     def _toolbar() -> str:
-        # Closure reads the latest ``thread_id`` and ``permission_mode``
-        # because Python closures resolve names at call time, not
-        # definition time — so a live ``/mode`` switch is reflected on
-        # the status line on the very next prompt redraw.
         return _build_status_line(
             model_id=model_id,
-            mode=permission_mode,
+            mode=state["permission_mode"],
             cwd=cwd,
-            thread_id=thread_id,
+            thread_id=state["thread_id"],
         )
 
-    # Phase 5 Slice 1: typing `/` pops a completer with every known
-    # slash command + its one-line description, so users don't have
-    # to remember the catalogue.
     from prompt_toolkit.history import InMemoryHistory  # noqa: PLC0415  (lazy import)
 
-    from quoriv.ui.chat_input import prompt_boxed  # noqa: PLC0415  (lazy import)
     from quoriv.ui.slash_completer import SlashCommandCompleter  # noqa: PLC0415  (lazy import)
 
     completer = SlashCommandCompleter(SLASH_COMMANDS)
     # Shared across turns so up-arrow recall works the way users expect.
     history = InMemoryHistory()
 
-    while True:
-        try:
-            user_input = await prompt_boxed(
-                completer=completer,
-                history=history,
-                bottom_toolbar=_toolbar,
-            )
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Goodbye.[/dim]")
-            return
+    chat_app = ChatApp(
+        completer=completer,
+        history=history,
+        bottom_toolbar=_toolbar,
+    )
+    # The chat console is now the ChatApp's scrollback console — every
+    # ``console.print(...)`` lands above the persistent layout via
+    # ``run_in_terminal``. The argument-passed ``console`` is preserved
+    # only for the welcome banner already printed (above this call) and
+    # for legacy test entry points.
+    ui_console = chat_app.console
 
-        user_input = user_input.strip()
-        if not user_input:
-            continue
+    nonlocal_agent: dict[str, Any] = {"agent": agent}
+    tracer_ref: dict[str, TraceLogger] = {"tracer": tracer}
 
-        if user_input.startswith("/"):
-            command_result = _handle_slash(
-                console,
-                user_input,
-                thread_id,
-                registry,
-                model_id=model_id,
-                cwd=cwd,
-                mode=permission_mode,
-                tracer=tracer,
-                cost_rates=cost_rates,
-            )
-            if command_result.exit:
+    async def _driver() -> None:
+        while True:
+            try:
+                user_input = await chat_app.prompt_input()
+            except (EOFError, KeyboardInterrupt):
+                ui_console.print("\n[dim]Goodbye.[/dim]")
                 return
-            if command_result.new_thread_id is not None:
-                thread_id = command_result.new_thread_id
-                # New thread → new trace file. The old logger is dropped;
-                # its file remains on disk for ``/cost`` against the prior
-                # thread (loadable via ``/load <name>`` later).
-                tracer = TraceLogger(trace_path(cwd, thread_id))
-            if command_result.new_mode is not None:
-                # Slice 8b: live mode switch. Rebuild the compiled agent
-                # against the same checkpointer so the running thread's
-                # state is unaffected — only the ``interrupt_on=`` dict
-                # changes. Falling back to the existing agent if any
-                # required wiring is missing keeps legacy callers that
-                # never pass ``config``/``checkpointer`` working.
-                new_mode = command_result.new_mode
-                if config is not None:
-                    agent = build_agent(
-                        config,
-                        model_override=model_override,
-                        cwd=cwd,
-                        mode=new_mode,
-                        checkpointer=checkpointer,
-                        extra_tools=extra_tools,
-                    )
-                permission_mode = new_mode
-                console.print(
-                    f"[green]Permission mode switched to[/green] [cyan]{permission_mode}[/cyan]."
-                )
-            continue
 
-        try:
-            await _drive_turn(
-                console,
-                agent,
-                user_input,
-                thread_id,
-                permission_mode,
-                tracer=tracer,
-                allowlist=allowlist,
-                hooks=hooks,
-            )
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Interrupted.[/yellow]")
-            continue
-        except Exception as exc:  # surface agent/network errors gracefully
-            console.print(f"\n[red]Error:[/red] {exc}")
-            continue
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+
+            if user_input.startswith("/"):
+                command_result = _handle_slash(
+                    ui_console,
+                    user_input,
+                    state["thread_id"],
+                    registry,
+                    model_id=model_id,
+                    cwd=cwd,
+                    mode=state["permission_mode"],
+                    tracer=tracer_ref["tracer"],
+                    cost_rates=cost_rates,
+                    chat_app=chat_app,
+                )
+                if command_result.exit:
+                    return
+                if command_result.new_thread_id is not None:
+                    state["thread_id"] = command_result.new_thread_id
+                    # New thread → new trace file. The old logger is dropped;
+                    # its file remains on disk for ``/cost`` against the prior
+                    # thread (loadable via ``/load <name>`` later).
+                    tracer_ref["tracer"] = TraceLogger(
+                        trace_path(cwd, command_result.new_thread_id)
+                    )
+                if command_result.new_mode is not None:
+                    # Slice 8b: live mode switch. Rebuild the compiled agent
+                    # against the same checkpointer so the running thread's
+                    # state is unaffected — only the ``interrupt_on=`` dict
+                    # changes. Falling back to the existing agent if any
+                    # required wiring is missing keeps legacy callers that
+                    # never pass ``config``/``checkpointer`` working.
+                    new_mode = command_result.new_mode
+                    if config is not None:
+                        nonlocal_agent["agent"] = build_agent(
+                            config,
+                            model_override=model_override,
+                            cwd=cwd,
+                            mode=new_mode,
+                            checkpointer=checkpointer,
+                            extra_tools=extra_tools,
+                        )
+                    state["permission_mode"] = new_mode
+                    ui_console.print(
+                        f"[green]Permission mode switched to[/green] "
+                        f"[cyan]{new_mode}[/cyan]."
+                    )
+                continue
+
+            try:
+                await _drive_turn(
+                    ui_console,
+                    nonlocal_agent["agent"],
+                    user_input,
+                    state["thread_id"],
+                    state["permission_mode"],
+                    tracer=tracer_ref["tracer"],
+                    allowlist=allowlist,
+                    hooks=hooks,
+                    chat_app=chat_app,
+                )
+            except KeyboardInterrupt:
+                ui_console.print("\n[yellow]Interrupted.[/yellow]")
+                continue
+            except Exception as exc:  # surface agent/network errors gracefully
+                ui_console.print(f"\n[red]Error:[/red] {exc}")
+                continue
+
+    await chat_app.run(_driver)
 
 
 def _build_status_line(
@@ -416,7 +443,7 @@ class _SlashResult:
         self.new_mode = new_mode
 
 
-def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one return per command
+def _handle_slash(  # noqa: PLR0911, PLR0912 — slash dispatch is a flat switch, one return per command
     console: Console,
     raw: str,
     current_thread_id: str,
@@ -427,6 +454,7 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
     mode: PermissionMode = "ask",
     tracer: TraceLogger | None = None,
     cost_rates: dict[str, ProviderRate] | None = None,
+    chat_app: ChatApp | None = None,
 ) -> _SlashResult:
     """Dispatch a slash command and return what the caller should do next.
 
@@ -446,11 +474,24 @@ def _handle_slash(  # noqa: PLR0911 — slash dispatch is a flat switch, one ret
 
     if cmd in ("/exit", "/quit"):
         console.print("[dim]Goodbye.[/dim]")
+        if chat_app is not None:
+            # Tell the persistent Application to stop pumping events
+            # so ``ChatApp.run`` returns cleanly. Without this the
+            # driver coroutine returns but ``app.run_async`` keeps
+            # waiting.
+            chat_app.exit()
         return _SlashResult(exit=True)
 
     if cmd == "/clear":
         new_id = _new_thread_id()
-        console.clear()
+        if chat_app is not None:
+            # Clear the stream window + invalidate; ``console.clear()``
+            # would write a CSI 2J sequence into scrollback which is
+            # not what the user means by ``/clear`` when a persistent
+            # UI is active.
+            chat_app.clear_transcript()
+        else:
+            console.clear()
         console.print("[dim]Started a fresh conversation.[/dim]")
         return _SlashResult(new_thread_id=new_id)
 
@@ -737,6 +778,7 @@ async def _drive_turn(
     tracer: TraceLogger | None = None,
     allowlist: SessionAllowlist | None = None,
     hooks: HookRegistry | None = None,
+    chat_app: ChatApp | None = None,
 ) -> None:
     """Drive one full user turn end-to-end, handling HITL interrupts.
 
@@ -767,7 +809,15 @@ async def _drive_turn(
     try:
         while True:
             console.print()
-            await _stream_events(console, agent, next_input, run_config, tracer=tracer, hooks=hooks)
+            await _stream_events(
+                console,
+                agent,
+                next_input,
+                run_config,
+                tracer=tracer,
+                hooks=hooks,
+                chat_app=chat_app,
+            )
             console.print()
 
             hitl_request = await _pending_hitl_request(agent, run_config)
@@ -779,6 +829,7 @@ async def _drive_turn(
                 hitl_request,
                 auto_deny=auto_deny,
                 allowlist=allowlist,
+                chat_app=chat_app,
             )
             next_input = Command(resume={"decisions": decisions})
     finally:
@@ -786,7 +837,7 @@ async def _drive_turn(
             tracer.log("turn_end", thread_id=thread_id)
 
 
-async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with optional tracer + hooks fires
+async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch with optional tracer + hooks fires
     console: Console,
     agent: Any,
     input_payload: Any,
@@ -794,6 +845,7 @@ async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with opt
     *,
     tracer: TraceLogger | None = None,
     hooks: HookRegistry | None = None,
+    chat_app: ChatApp | None = None,
 ) -> None:
     """Pump the agent's event stream into the UI.
 
@@ -813,7 +865,12 @@ async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with opt
     final ``AIMessage`` if LangChain produced one). The registry catches
     callback exceptions, so a broken hook can never break a turn.
     """
-    renderer = StreamRenderer(console)
+    renderer = StreamRenderer(chat_app)
+    # Resolve the markdown-fallback console once. When ``chat_app`` is
+    # wired, ``_finalize_stream`` flushes the rendered markdown into
+    # scrollback. Otherwise we keep the legacy behaviour of writing
+    # the raw chunks through ``console.print`` so headless tests can
+    # still see the text.
     try:
         async for event in agent.astream_events(input_payload, config=run_config, version="v2"):
             kind = event.get("event")
@@ -825,10 +882,17 @@ async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with opt
                     continue
                 text = _chunk_text(getattr(chunk, "content", ""))
                 renderer.push(text)
+                if chat_app is None and text:
+                    # Headless / legacy path: no persistent UI to
+                    # repaint, so echo the raw chunk so tests see it.
+                    console.print(text, end="")
                 continue
 
             if kind == "on_chat_model_end":
-                renderer.finalize()
+                if chat_app is not None:
+                    await renderer.finalize_async()
+                else:
+                    renderer.finalize()
                 if tracer is not None:
                     _trace_model_complete(tracer, event)
                 if hooks is not None:
@@ -836,7 +900,10 @@ async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with opt
                 continue
 
             if kind == "on_tool_start":
-                renderer.finalize()
+                if chat_app is not None:
+                    await renderer.finalize_async()
+                else:
+                    renderer.finalize()
                 name = event.get("name", "?")
                 tool_args = data.get("input", {})
                 if tracer is not None:
@@ -868,7 +935,10 @@ async def _stream_events(  # noqa: PLR0912 — flat event-kind dispatch with opt
                 render_tool_end(console, output)
                 continue
     finally:
-        renderer.finalize()
+        if chat_app is not None:
+            await renderer.finalize_async()
+        else:
+            renderer.finalize()
 
 
 _OUTPUT_PREVIEW_LIMIT = 500
@@ -926,6 +996,7 @@ async def _collect_decisions(
     *,
     auto_deny: bool,
     allowlist: SessionAllowlist | None = None,
+    chat_app: ChatApp | None = None,
 ) -> list[dict[str, Any]]:
     """Prompt the user for each ``ActionRequest`` and serialize the decisions.
 
@@ -959,6 +1030,7 @@ async def _collect_decisions(
             tool_args=action.get("args", {}),
             description=action.get("description"),
             auto_deny=auto_deny,
+            chat_app=chat_app,
         )
         if (
             decision.type == "approve_always"
