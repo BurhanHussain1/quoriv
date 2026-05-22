@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.2.2] — 2026-05-23
+
+### Fixed
+
+- Apply `ruff format` to the four files added/modified in 1.2.0 / 1.2.1 (`src/quoriv/app.py`, `src/quoriv/ui/chat_app.py`, `src/quoriv/ui/prompts.py`, `tests/unit/ui/test_chat_app.py`). CI lint was failing `ruff format --check .`; pure cosmetic reflow with no semantic change.
+
+---
+
 ## [1.2.1] — 2026-05-23
 
 ### Fixed
