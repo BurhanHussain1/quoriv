@@ -36,9 +36,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
-from rich.panel import Panel
 
-from quoriv import __version__
 from quoriv.core import (
     SessionRegistry,
     build_agent,
@@ -254,7 +252,16 @@ async def _interactive_loop(
             thread_id=thread_id,
         )
 
-    session: PromptSession[str] = PromptSession(bottom_toolbar=_toolbar)
+    # Phase 5 Slice 1: typing `/` pops a completer with every known
+    # slash command + its one-line description, so users don't have
+    # to remember the catalogue.
+    from quoriv.ui.slash_completer import SlashCommandCompleter  # noqa: PLC0415  (lazy import)
+
+    session: PromptSession[str] = PromptSession(
+        bottom_toolbar=_toolbar,
+        completer=SlashCommandCompleter(SLASH_COMMANDS),
+        complete_while_typing=True,
+    )
 
     while True:
         try:
@@ -356,28 +363,20 @@ def _render_welcome(
     mode: str,
     cwd: Path | None,
 ) -> None:
-    cwd_display = str(cwd) if cwd is not None else "(current directory)"
-    # Phase 2 Slice 1: surface the memory files the agent has actually
-    # loaded — silent when none exist, so users without a PROJECT.md
-    # don't see a clutter line.
+    # Phase 5 Slice 1: delegate to the richer banner renderer in
+    # ``quoriv.ui.banner``. Resolved memory files and the slash command
+    # grid are surfaced inside the panel so users see the available
+    # commands without having to type ``/help`` first.
+    from quoriv.ui.banner import render_welcome_banner  # noqa: PLC0415  (lazy import)
+
     loaded = resolve_memory_files(cwd if cwd is not None else Path.cwd())
-    memory_line = ""
-    if loaded:
-        names = ", ".join(p.name for p in loaded)
-        memory_line = f"Memory: [cyan]{names}[/cyan]\n"
-    console.print(
-        Panel.fit(
-            (
-                f"[bold]Quoriv[/bold] v{__version__}\n"
-                f"Model: [cyan]{model_id}[/cyan]\n"
-                f"Mode:  [cyan]{mode}[/cyan]\n"
-                f"Root:  [cyan]{cwd_display}[/cyan]\n"
-                f"{memory_line}"
-                f"Type [yellow]/help[/yellow] for commands, [yellow]/exit[/yellow] to quit."
-            ),
-            title="welcome",
-            border_style="cyan",
-        )
+    render_welcome_banner(
+        console,
+        model_id=model_id,
+        mode=mode,
+        cwd=cwd,
+        memory_files=loaded,
+        slash_commands=SLASH_COMMANDS,
     )
 
 
