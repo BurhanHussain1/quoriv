@@ -207,7 +207,7 @@ async def run_chat(
         )
 
 
-async def _interactive_loop(
+async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its layout + driver
     console: Console,
     agent: Any,
     registry: SessionRegistry,
@@ -266,7 +266,25 @@ async def _interactive_loop(
 
     from quoriv.ui.slash_completer import SlashCommandCompleter  # noqa: PLC0415  (lazy import)
 
-    completer = SlashCommandCompleter(SLASH_COMMANDS)
+    # Slice 3: argument completions for the slash commands that take
+    # one of a known set of values. The provider lambdas are evaluated
+    # at completion time so dynamic data (saved sessions) stays fresh
+    # without rebuilding the completer.
+    def _mode_options() -> list[tuple[str, str]]:
+        return [(mode, _MODE_DESCRIPTIONS[mode]) for mode in ALLOWED_MODES]
+
+    def _load_options() -> list[tuple[str, str]]:
+        sessions = registry.list_named()
+        sorted_sessions = sorted(sessions, key=lambda s: s.saved_at, reverse=True)
+        return [(s.name, f"{s.saved_at}  thread {s.thread_id[:8]}") for s in sorted_sessions]
+
+    completer = SlashCommandCompleter(
+        SLASH_COMMANDS,
+        argument_providers={
+            "/mode": _mode_options,
+            "/load": _load_options,
+        },
+    )
     # Shared across turns so up-arrow recall works the way users expect.
     history = InMemoryHistory()
 

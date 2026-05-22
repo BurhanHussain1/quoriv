@@ -767,6 +767,24 @@ class ChatApp:
         def _submit(event: Any) -> None:
             if not _input_focused(event):
                 return
+            buf = event.current_buffer
+
+            # Claude-Code-style inline typeahead: if the autocomplete
+            # menu is open and the user has highlighted a completion,
+            # apply it before deciding whether to submit. Completions
+            # whose text ends with a space (command names like
+            # ``/mode ``) keep the cursor in the buffer so the user
+            # can flow into argument completion; completions without
+            # a trailing space (concrete arguments like ``auto``)
+            # apply *and* submit in a single Enter press.
+            if buf.complete_state is not None:
+                completion = buf.complete_state.current_completion
+                if completion is not None:
+                    buf.apply_completion(completion)
+                    if completion.text.endswith(" "):
+                        buf.complete_state = None
+                        return
+
             fut = self._input_future
             if fut is None or fut.done():
                 return

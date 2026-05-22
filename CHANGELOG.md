@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.4.0] — 2026-05-23
+
+### Added — Inline argument typeahead (Claude-Code-style)
+
+- **`SlashCommandCompleter` now supports an `argument_providers` mapping** — pass `{cmd: () -> [(value, meta), ...]}` and the completer will surface argument completions when the user has typed `<cmd> ` (command + space). The popup is the same inline `complete-while-typing` autocomplete the user already sees for the command name itself, so the flow is: type `/mo` → menu shows `/mode` → Enter → buffer becomes `/mode ` and the menu reopens with `read-only / ask / auto / yolo` → Down + Enter → buffer becomes `/mode auto` and the command submits in the same Enter press.
+- **`ChatApp` Enter binding applies-and-submits highlighted completions.** When the autocomplete menu has a completion selected via arrow keys, pressing Enter applies it to the buffer first. Completions that end with a trailing space (command names with an arg provider, e.g. `/mode `) leave the cursor in the buffer so the user can flow into the argument phase; completions without a trailing space (concrete arguments like `auto`) apply *and* submit in a single Enter press — no double-tap required.
+- `_interactive_loop` now wires `/mode` and `/load` argument providers into `SlashCommandCompleter`. The mode provider returns the four `ALLOWED_MODES` with their descriptions; the load provider returns saved sessions newest-first with timestamp + short thread id metadata.
+
+### Changed
+
+- Command-name completions emit a trailing space **only** when the command has a registered arg provider. `/help`, `/exit`, `/clear` etc. complete to the bare command so Enter submits immediately; `/mode`, `/load`, `/save` complete to `<cmd> ` (with space) to flow into argument completion.
+
+### Tests
+
+- 8 new tests in `tests/unit/ui/test_slash_completer.py` covering: arg-provider commands get the trailing space, non-arg commands don't, `/mode ` surfaces all mode values, prefix narrows, meta from provider, case-insensitive matching, unknown commands silent, provider called fresh per completion request.
+
+**Test count: 905 → 913** (+8). All gates green.
+
+---
+
 ## [1.3.1] — 2026-05-23
 
 ### Changed
