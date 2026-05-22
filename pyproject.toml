@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quoriv"
-version = "1.2.0"
+version = "1.2.1"
 description = "Open-source terminal AI coding agent with multi-model support (OpenAI, Anthropic, Gemini, Ollama, vLLM)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,7 @@ dependencies = [
     "langchain>=1.0,<2.0",
     "langchain-core>=1.0,<2.0",
     "langgraph>=1.0,<2.0",
-    "langgraph-checkpoint-sqlite>=2.0.0,<3.0",
+    "langgraph-checkpoint-sqlite>=3.0,<4.0",
     "langchain-openai>=1.0,<2.0",
 
     # Terminal UI

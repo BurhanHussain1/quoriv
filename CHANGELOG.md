@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.2.1] — 2026-05-23
+
+### Fixed
+
+- **Echo user input into scrollback after submit.** With the v1.2.0 persistent Application the input buffer reset on Enter, so the message the user just sent disappeared from screen before the assistant's reply streamed in — leaving the transcript looking like a one-sided monologue. The driver now prints `> {message}` to scrollback right after `prompt_input()` returns.
+- **Checkpointer crash: `'JsonPlusSerializer' object has no attribute 'dumps'`.** `langgraph-checkpoint-sqlite` 2.x calls `self.jsonplus_serde.dumps(...)` for metadata, but the `langgraph-checkpoint` 4.x line (transitively pulled by `langgraph` ≥1.2) only ships `dumps_typed` / `loads_typed`. Bumped the dependency to `langgraph-checkpoint-sqlite>=3.0,<4.0` — the 3.x line uses `json.dumps` for metadata and `serde.dumps_typed` for state, which is compatible with `langgraph-checkpoint` 4.x.
+
+---
+
 ## [1.2.0] — 2026-05-23
 
 ### Added — Phase 5 Slice 2: persistent prompt_toolkit Application

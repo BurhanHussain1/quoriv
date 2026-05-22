@@ -297,6 +297,12 @@ async def _interactive_loop(
             if not user_input:
                 continue
 
+            # Echo the submitted line into scrollback so the user can
+            # see what they sent. Without this the persistent input
+            # buffer resets on submit and the question silently
+            # disappears before the response streams in.
+            ui_console.print(f"\n[bold magenta]>[/bold magenta] {user_input}")
+
             if user_input.startswith("/"):
                 command_result = _handle_slash(
                     ui_console,
