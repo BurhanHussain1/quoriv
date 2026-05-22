@@ -8,26 +8,36 @@ that into a user-facing prompt:
     1. Render a Rich panel showing the tool name, arguments, and the
        middleware's description.
     2. Ask the user to approve or reject.
-    3. In ``read-only`` mode, skip the prompt and auto-reject — the agent
-       gets back a clear message explaining the mode.
+    3. In ``read-only`` mode, skip the prompt and auto-reject — the
+       agent gets back a clear message explaining the mode.
 
-Phase 1 Slice 2 supports ``approve`` and ``reject``. ``edit`` and
-``respond`` (the other two decision types accepted by the middleware)
-land in later slices once the UI for editing tool args exists.
+Phase 5 Slice 2 (v1.2.0): the interactive path used to spin up a
+fresh :class:`prompt_toolkit.PromptSession`, which fought with the
+chat loop's persistent Application over terminal ownership. The
+prompt now runs as a :class:`prompt_toolkit.layout.containers.Float`
+modal dialog overlaid on the existing :class:`quoriv.ui.chat_app.ChatApp`,
+so the screen never blanks between "agent streaming" and "user
+deciding". ``a`` approves, ``r`` rejects, ``A`` approves-and-remembers,
+``Esc`` / ``Ctrl+C`` cancel.
+
+Supported decisions: ``approve`` / ``reject`` / ``approve_always``.
+``edit`` and ``respond`` (the other two decision types accepted by
+the middleware) land in later slices once the UI for editing tool
+args exists.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from io import StringIO
 from typing import TYPE_CHECKING, Any, Literal
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
+from rich.console import Console
 from rich.panel import Panel
 
 if TYPE_CHECKING:
-    from rich.console import Console
+    from quoriv.ui.chat_app import ChatApp
 
 
 DecisionType = Literal["approve", "reject", "approve_always"]
@@ -76,19 +86,26 @@ async def prompt_approval(
     tool_args: dict[str, Any],
     description: str | None = None,
     auto_deny: bool = False,
+    chat_app: ChatApp | None = None,
 ) -> ApprovalDecision:
     """Render an approval panel and return the user's decision.
 
     Args:
-        console: Rich console for output.
+        console: Rich console for output. When ``chat_app`` is wired
+            this is typically ``chat_app.console`` — every panel ends
+            up in the persistent Application's scrollback.
         tool_name: The proposed tool (e.g. ``"edit_file"``).
         tool_args: The tool call's arguments.
         description: Optional human-readable description from the
-            middleware. When present, it replaces the auto-generated
-            "Tool: ... Args: ..." line.
-        auto_deny: If ``True``, render the panel but skip the interactive
-            prompt and return a ``reject`` decision immediately. Used for
-            ``read-only`` mode.
+            middleware. When present, it's surfaced inside the modal
+            body.
+        auto_deny: If ``True``, render the panel but skip the
+            interactive prompt and return a ``reject`` decision
+            immediately. Used for ``read-only`` mode.
+        chat_app: The persistent :class:`ChatApp` to overlay the modal
+            on. When ``None`` (legacy + headless tests), the function
+            renders the panel and short-circuits to a ``reject`` —
+            interactive approval requires a live Application.
 
     Returns:
         :class:`ApprovalDecision` describing what the user chose.
@@ -99,26 +116,27 @@ async def prompt_approval(
         console.print("[yellow]Auto-denied (read-only mode).[/yellow]")
         return ApprovalDecision(type="reject", message=READ_ONLY_DENIAL_MESSAGE)
 
-    session: PromptSession[str] = PromptSession()
-    while True:
-        raw = await session.prompt_async(
-            HTML(
-                "<ansigreen>approve</ansigreen> / "
-                "<ansired>reject</ansired> / "
-                "<ansiyellow>always</ansiyellow>  [a/r/A] > "
-            )
-        )
-        choice = parse_choice(raw)
-        if choice == "approve":
-            return ApprovalDecision(type="approve")
-        if choice == "approve_always":
-            return ApprovalDecision(type="approve_always")
-        if choice == "reject":
-            return ApprovalDecision(type="reject", message="User rejected this tool call.")
+    if chat_app is None:
+        # No live Application — the legacy ``PromptSession`` path is
+        # gone (it fought with the persistent app over the terminal).
+        # Calls without a ``chat_app`` are typically tests stubbing
+        # the function; reject so a misconfigured production call
+        # surfaces visibly instead of hanging.
         console.print(
-            "[dim]Please answer 'a' (approve), 'r' (reject), or 'A' / 'always' "
-            "(approve and remember for this session). Aliases: y/yes/n/no.[/dim]"
+            "[red]No interactive UI available — auto-rejecting approval.[/red]"
         )
+        return ApprovalDecision(
+            type="reject",
+            message="No interactive UI available for approval.",
+        )
+
+    body_text = _render_approval_body_ansi(tool_name, tool_args, description)
+    choice = await chat_app.prompt_approval_modal(body_text=body_text)
+    if choice == "approve":
+        return ApprovalDecision(type="approve")
+    if choice == "approve_always":
+        return ApprovalDecision(type="approve_always")
+    return ApprovalDecision(type="reject", message="User rejected this tool call.")
 
 
 def parse_choice(raw: str) -> DecisionType | None:
@@ -133,7 +151,9 @@ def parse_choice(raw: str) -> DecisionType | None:
         reject:         r, reject, n, no, deny
 
     Note: this function preserves case for the ``A`` short form. Every
-    other alias is matched case-insensitively.
+    other alias is matched case-insensitively. Retained for any caller
+    or test that wants to translate a textual hint into a decision
+    type without going through the modal.
     """
     stripped = raw.strip()
     if stripped in {"A", "aa"} or stripped.lower() == "always":
@@ -157,7 +177,13 @@ def _render_approval_panel(
     tool_args: dict[str, Any],
     description: str | None,
 ) -> None:
-    """Render the panel that frames the approval prompt."""
+    """Render the panel that frames the approval prompt (scrollback copy).
+
+    The modal also embeds a copy of this content for visibility while
+    focus is on the dialog; printing here keeps the panel in
+    scrollback so users see *what was asked* even after the modal
+    closes.
+    """
     args_pretty = _format_args(tool_args)
     body_lines = [
         f"[bold cyan]{tool_name}[/bold cyan]",
@@ -176,6 +202,48 @@ def _render_approval_panel(
             expand=False,
         )
     )
+
+
+def _render_approval_body_ansi(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    description: str | None,
+) -> str:
+    """Render the modal body as ANSI text via Rich.
+
+    The Dialog widget accepts ANSI-formatted text, so we let Rich do
+    the heavy lifting (panel border, syntax colours) and hand the
+    resulting bytes to prompt_toolkit. A fresh ``Console`` is used
+    rather than the chat console because the latter is wired to the
+    Application's scrollback — printing the modal body through it
+    would echo the panel into scrollback a second time.
+    """
+    buf = StringIO()
+    console = Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        width=80,
+        soft_wrap=False,
+    )
+    args_pretty = _format_args(tool_args)
+    body_lines = [
+        f"[bold cyan]{tool_name}[/bold cyan]",
+        "",
+        "[dim]args:[/dim]",
+        args_pretty,
+    ]
+    if description:
+        body_lines.extend(["", "[dim]description:[/dim]", description])
+    console.print(
+        Panel(
+            "\n".join(body_lines),
+            title="[yellow]approval required[/yellow]",
+            border_style="yellow",
+            expand=False,
+        )
+    )
+    return buf.getvalue()
 
 
 def _format_args(args: dict[str, Any], *, indent: int = 2) -> str:

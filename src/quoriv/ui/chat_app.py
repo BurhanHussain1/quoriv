@@ -1,0 +1,643 @@
+"""Persistent prompt_toolkit Application that hosts the chat UI.
+
+Phase 5 Slice 2 (v1.2.0): the chat loop used to spin up a fresh
+``Application`` per input turn and let Rich own the terminal between
+turns. That worked but meant prompt_toolkit and Rich were taking turns
+holding the cursor — fine for plain text, ugly for streamed markdown,
+and made HITL approval prompts (a ``PromptSession`` running between
+two Rich renders) feel disjointed.
+
+This module replaces the per-turn pattern with a **single
+:class:`prompt_toolkit.Application` that lives for the whole chat
+session**. Its layout is:
+
+* A **stream window** (``FormattedTextControl`` wrapping ANSI-rendered
+  markdown) that the agent's ``astream_events`` updates in place —
+  no more Rich ``Live``.
+* A **bordered input frame** at the bottom (the same Frame look as
+  Phase 5 Slice 1).
+* An **optional bottom toolbar** for the persistent status line.
+* A :class:`FloatContainer` overlay that can host modal dialogs —
+  used to render the HITL approval prompt in
+  :func:`quoriv.ui.prompts.prompt_approval`.
+
+The chat loop coroutine drives the Application by:
+
+1. ``await app.prompt_input()`` — sets up an internal future that the
+   ``Enter`` keybinding resolves with the buffer contents.
+2. ``app.push_chunk(text)`` / ``await app.finalize_stream()`` — push
+   tokens into the stream window during a turn, then commit the
+   finished response to terminal scrollback so the window can clear
+   itself for the next turn.
+3. ``await app.prompt_approval(...)`` — install a modal Float and
+   await the user's decision; the keybindings ``a`` / ``r`` / ``A``
+   resolve the future.
+
+All non-streaming output (welcome banner, slash command help, tool
+diffs, errors) flows through ``app.console`` — a :class:`rich.Console`
+whose ``file`` is a small adapter that forwards every Rich ``print``
+into :meth:`Application.print_text` (which scrolls above the
+Application area without interfering with the live render).
+
+Design notes:
+
+* ``run_in_terminal`` is used for printing-while-running. Calling
+  ``Application.print_text`` directly while the renderer is live
+  would corrupt the screen — the docstring on ``print_text`` says
+  exactly this.
+* The stream window uses ``dont_extend_height=True`` + a dynamic
+  ``height`` so the inline Application grows with the response. On
+  finalize we flush the rendered markdown into scrollback and clear
+  the buffer in one atomic ``run_in_terminal`` callback — no flicker,
+  no duplicate text.
+* The approval modal is a :class:`prompt_toolkit.widgets.Dialog`
+  wrapped in a :class:`Float`. While it's installed the modal owns
+  focus and its own keybindings; the input buffer's bindings only
+  fire for input-prompts, never approval-prompts.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import sys
+from io import StringIO
+from typing import TYPE_CHECKING, Any
+
+from prompt_toolkit.application import Application, run_in_terminal
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+from prompt_toolkit.history import History, InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, Window
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.widgets import Dialog, Frame, Label
+from rich.console import Console
+from rich.markdown import Markdown
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from prompt_toolkit.completion import Completer
+
+    from quoriv.ui.prompts import ApprovalDecision
+
+
+# ---------------------------------------------------------------------------
+# Rich → prompt_toolkit bridge
+# ---------------------------------------------------------------------------
+
+
+class _AppConsoleFile:
+    """File-like object that forwards Rich output into the Application.
+
+    Rich writes ANSI-coloured bytes to its ``file``. We collect them
+    until ``flush()`` (or an explicit newline-bounded chunk) and then
+    schedule a ``run_in_terminal`` call that emits the text above the
+    Application's reserved area. The end result is that any caller
+    using ``app.console.print(...)`` sees their content in terminal
+    scrollback exactly as if Rich were the only thing writing.
+    """
+
+    __slots__ = ("_app", "_buf", "_loop")
+
+    def __init__(self, app: ChatApp) -> None:
+        self._app = app
+        self._buf = ""
+        # The chat loop's running asyncio loop. We don't capture it
+        # eagerly because the ChatApp can be constructed before the
+        # loop is running (e.g. in tests that just build the layout).
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def write(self, s: str) -> int:
+        if not isinstance(s, str):  # pragma: no cover — Rich always writes str
+            s = str(s)
+        self._buf += s
+        return len(s)
+
+    def flush(self) -> None:
+        if not self._buf:
+            return
+        text = self._buf
+        self._buf = ""
+        self._app._schedule_scrollback_print(text)
+
+    def isatty(self) -> bool:
+        # Rich looks at this to decide whether to emit colour codes.
+        # We're targeting a real terminal (prompt_toolkit's output),
+        # so claim TTY.
+        return True
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+async def _await_in_terminal(func: Any) -> None:
+    """Thin coroutine wrapper around :func:`run_in_terminal`.
+
+    ``run_in_terminal`` is annotated as returning ``Awaitable[_T]`` —
+    mypy refuses to attach ``add_done_callback`` to that. Wrapping it
+    in an ``async`` function lets ``asyncio.ensure_future`` produce a
+    proper ``Task`` we can introspect, at the cost of one extra await.
+    """
+    await run_in_terminal(func)
+
+
+# ---------------------------------------------------------------------------
+# Markdown rendering helper
+# ---------------------------------------------------------------------------
+
+
+def _render_markdown_to_ansi(text: str, *, width: int = 100) -> str:
+    """Render a markdown string to ANSI-coloured terminal output.
+
+    Used for both the streaming preview Window and the final scrollback
+    flush. A fresh Console is built per call rather than reused so the
+    ``record`` / ``file`` state can't leak between renderings.
+    """
+    if not text:
+        return ""
+    buf = StringIO()
+    console = Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        width=width,
+        soft_wrap=True,
+    )
+    console.print(Markdown(text))
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# ChatApp — the persistent Application wrapper
+# ---------------------------------------------------------------------------
+
+
+class ChatApp:
+    """Persistent chat Application owning the prompt_toolkit layout.
+
+    Construction is cheap and doesn't touch the terminal — instances
+    can be built in tests for layout introspection. :meth:`run`
+    actually starts the event loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        completer: Completer | None = None,
+        history: History | None = None,
+        bottom_toolbar: Callable[[], str] | None = None,
+        frame_title: str = "quoriv",
+        stream_width: int = 100,
+        output: Any = None,
+        input: Any = None,
+    ) -> None:
+        # Stream state. ``_stream_buffer`` is the in-flight markdown
+        # being accumulated by ``push_chunk``; ``_get_stream_fragments``
+        # re-renders it on every redraw so the visible markdown stays
+        # current.
+        self._stream_buffer = ""
+        self._stream_width = stream_width
+
+        # Pending interaction futures. At most one of these is non-None
+        # at any moment; both default to None so a stray Enter while
+        # nothing's awaiting is a no-op.
+        self._input_future: asyncio.Future[str] | None = None
+        self._approval_future: asyncio.Future[ApprovalDecision] | None = None
+        self._exit_requested = False
+
+        # Input buffer + frame (same look as Phase 5 Slice 1).
+        self._input_buffer = Buffer(
+            completer=completer,
+            history=history if history is not None else InMemoryHistory(),
+            multiline=False,
+            complete_while_typing=True,
+        )
+        self._input_control = BufferControl(buffer=self._input_buffer)
+        input_inner = Window(self._input_control, height=1, wrap_lines=False)
+        self._input_frame = Frame(input_inner, title=frame_title)
+
+        # Stream window — dynamic height that grows with content. The
+        # ``height=Dimension(min=0)`` lets the window collapse to zero
+        # lines when no stream is active so the input frame sits
+        # directly under whatever Rich just printed.
+        self._stream_control = FormattedTextControl(
+            text=self._get_stream_fragments,
+            focusable=False,
+            show_cursor=False,
+        )
+        self._stream_window = Window(
+            self._stream_control,
+            wrap_lines=True,
+            dont_extend_height=True,
+            height=Dimension(min=0),
+        )
+
+        # Bottom toolbar (optional, mirrors the Slice 1 status line).
+        children: list[Any] = [self._stream_window, self._input_frame]
+        if bottom_toolbar is not None:
+            children.append(
+                Window(
+                    FormattedTextControl(bottom_toolbar),
+                    height=1,
+                    style="class:bottom-toolbar",
+                )
+            )
+
+        # FloatContainer wraps the HSplit so modal dialogs can overlay
+        # both the stream and the input box. Modals are installed by
+        # appending to ``self._float_container.floats`` and removed in
+        # the awaiting coroutine's ``finally``.
+        self._float_container = FloatContainer(
+            content=HSplit(children),
+            floats=[],
+        )
+
+        self._key_bindings = self._build_key_bindings()
+
+        app_kwargs: dict[str, Any] = {
+            "layout": Layout(
+                self._float_container,
+                focused_element=input_inner,
+            ),
+            "key_bindings": self._key_bindings,
+            "full_screen": False,
+            "mouse_support": False,
+        }
+        if output is not None:
+            app_kwargs["output"] = output
+        if input is not None:
+            app_kwargs["input"] = input
+        self.app: Application[Any] = Application(**app_kwargs)
+
+        # Rich console whose output is routed into the Application's
+        # scrollback. Constructed lazily so tests that just want layout
+        # introspection don't pay for it.
+        self._console_file = _AppConsoleFile(self)
+        self._console: Console | None = None
+
+    # ----- Public state ---------------------------------------------------
+
+    @property
+    def console(self) -> Console:
+        """Rich :class:`Console` that writes into the Application's scrollback.
+
+        Use this instead of constructing your own console — anything
+        printed through it lands above the persistent layout via
+        ``app.print_text`` (which is safe even mid-render thanks to the
+        ``run_in_terminal`` scheduling in :class:`_AppConsoleFile`).
+        """
+        if self._console is None:
+            # Rich's ``Console`` typing wants ``IO[str]``; our adapter
+            # implements the subset Rich actually uses (write / flush /
+            # isatty / encoding) but isn't a full ``IO[str]`` instance.
+            # Cast is safe and keeps mypy quiet.
+            from typing import IO, cast  # noqa: PLC0415  (narrow scope)
+
+            self._console = Console(
+                file=cast("IO[str]", self._console_file),
+                force_terminal=True,
+                color_system="truecolor",
+                width=self._stream_width,
+            )
+        return self._console
+
+    @property
+    def stream_buffer(self) -> str:
+        """Current in-flight streamed markdown text (testing hook)."""
+        return self._stream_buffer
+
+    @property
+    def is_streaming(self) -> bool:
+        """True if any text has been pushed since the last finalize."""
+        return bool(self._stream_buffer)
+
+    # ----- Lifecycle ------------------------------------------------------
+
+    async def run(self, driver: Callable[[], Awaitable[None]]) -> None:
+        """Start the persistent Application and the chat-driver coroutine.
+
+        The Application runs until either:
+
+        * the driver coroutine returns (clean exit — the chat loop
+          handles ``/exit``, ``EOFError``, etc.), or
+        * an exception bubbles out of the driver (re-raised here after
+          the Application is torn down).
+
+        The driver coroutine is started as a background task **after**
+        the Application begins running so its first ``await
+        prompt_input()`` finds the Application already pumping events.
+        """
+        driver_task: asyncio.Task[None] | None = None
+        driver_exc: BaseException | None = None
+
+        def _record(task: asyncio.Task[None]) -> None:
+            nonlocal driver_exc
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                driver_exc = exc
+            # Whether the driver finished cleanly or raised, the
+            # Application should exit so ``run_async`` returns.
+            if not self.app.is_done:
+                self.app.exit()
+
+        def _pre_run() -> None:
+            # ``pre_run`` fires synchronously inside the running event
+            # loop, just before the Application starts pumping events.
+            # Spawning the driver coroutine here guarantees its first
+            # ``await prompt_input()`` finds the Application alive.
+            nonlocal driver_task
+            driver_task = asyncio.create_task(driver())  # type: ignore[arg-type]
+            driver_task.add_done_callback(_record)
+
+        try:
+            await self.app.run_async(pre_run=_pre_run)
+        finally:
+            if driver_task is not None and not driver_task.done():
+                driver_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await driver_task
+        if driver_exc is not None:
+            raise driver_exc
+
+    def exit(self) -> None:
+        """Request the Application to exit at the next safe point.
+
+        Used by ``/exit`` / ``/quit`` after they finish writing their
+        goodbye line.
+        """
+        self._exit_requested = True
+        if not self.app.is_done:
+            self.app.exit()
+
+    # ----- Input prompt ---------------------------------------------------
+
+    async def prompt_input(self) -> str:
+        """Wait for the user to submit a line of input.
+
+        Raises:
+            EOFError: When the user pressed Ctrl+C or Ctrl+D — mirrors
+                ``PromptSession.prompt_async`` so the chat loop's
+                existing exception handling keeps working.
+        """
+        if self._input_future is not None:
+            raise RuntimeError("prompt_input() is already awaiting")
+        loop = asyncio.get_running_loop()
+        self._input_future = loop.create_future()
+        try:
+            return await self._input_future
+        finally:
+            self._input_future = None
+
+    # ----- Stream window --------------------------------------------------
+
+    def push_chunk(self, text: str) -> None:
+        """Append a streamed token to the in-flight markdown buffer.
+
+        Empty input is a no-op — matches the legacy
+        :class:`quoriv.ui.stream.StreamRenderer` semantics so callers
+        can blindly forward LangChain chunks.
+        """
+        if not text:
+            return
+        self._stream_buffer += text
+        if not self.app.is_done:
+            self.app.invalidate()
+
+    async def finalize_stream(self) -> str:
+        """Flush the current stream to scrollback and clear the window.
+
+        Renders the accumulated markdown to ANSI once, prints it above
+        the Application area (so it lands in terminal scrollback the
+        same way Rich's pre-Slice-2 output did), then clears the
+        in-window buffer. The print and the clear happen inside a
+        single ``run_in_terminal`` callback so the screen never shows
+        an intermediate "empty stream + nothing in scrollback" state.
+
+        Safe to call when no stream is active — returns ``""``.
+        """
+        if not self._stream_buffer:
+            return ""
+        text = self._stream_buffer
+        rendered = _render_markdown_to_ansi(text, width=self._stream_width)
+
+        def _flush() -> None:
+            self._stream_buffer = ""
+            # ``print_text`` requires ``run_in_terminal`` while the
+            # app is running, which is exactly the context we're in.
+            self.app.print_text(ANSI(rendered))
+
+        if self.app.is_done:
+            # Tests / shutdown path — just write directly.
+            self._stream_buffer = ""
+        else:
+            await run_in_terminal(_flush)
+        return text
+
+    def _get_stream_fragments(self) -> Any:
+        """Build the FormattedText fragments shown in the stream window."""
+        if not self._stream_buffer:
+            return to_formatted_text("")
+        return ANSI(_render_markdown_to_ansi(self._stream_buffer, width=self._stream_width))
+
+    # ----- Console scrollback ---------------------------------------------
+
+    def _schedule_scrollback_print(self, text: str) -> None:
+        """Forward a Rich-formatted block to the Application's scrollback.
+
+        Always-safe entry point: works whether the Application is
+        running, not yet started, or already exited. The branching:
+
+        * App running → schedule a ``run_in_terminal`` task that prints
+          the text above the live render.
+        * App not yet started (tests / pre-run banner) → buffer the
+          text into the stream buffer so the very next render shows
+          it. We can't legally call ``print_text`` here.
+        * App already done → write directly to the underlying output.
+        """
+        if not text:
+            return
+        if self.app.is_done:
+            # Final teardown — bypass the Application entirely.
+            try:
+                self.app.output.write_raw(text)
+                self.app.output.flush()
+            except Exception:  # pragma: no cover — best-effort fallback
+                # Last resort: write to real stderr so the message
+                # isn't silently lost.
+                sys.stderr.write(text)
+            return
+        if not self.app.is_running:
+            # Pre-run output (welcome banner). Stash on the stream
+            # buffer so the first render shows it. The chat-driver
+            # coroutine clears this after the user's first input.
+            self._stream_buffer += text
+            return
+
+        # Hot path: schedule an in-terminal print. We can't ``await``
+        # here (this is sync from Rich's perspective), so fire-and-
+        # forget. ``run_in_terminal`` is annotated ``Awaitable`` but is
+        # implemented as ``ensure_future(run())`` — wrap the result in
+        # ``ensure_future`` so mypy sees a Task we can attach a
+        # done-callback to.
+        fut = asyncio.ensure_future(
+            _await_in_terminal(lambda: self.app.print_text(ANSI(text)))
+        )
+
+        def _log_exc(f: asyncio.Future[Any]) -> None:
+            if f.cancelled():
+                return
+            exc = f.exception()
+            if exc is not None:  # pragma: no cover — defensive
+                sys.stderr.write(f"chat_app scrollback print failed: {exc!r}\n")
+
+        fut.add_done_callback(_log_exc)
+
+    def clear_transcript(self) -> None:
+        """Erase any pending scrollback / stream state.
+
+        Used by ``/clear``. The terminal's own scrollback isn't
+        cleared (that's the terminal emulator's job); we just reset
+        the in-flight stream so the next render starts fresh.
+        """
+        self._stream_buffer = ""
+        if not self.app.is_done:
+            self.app.invalidate()
+
+    # ----- Approval modal -------------------------------------------------
+
+    async def prompt_approval_modal(
+        self,
+        *,
+        body_text: str,
+        title: str = "approval required",
+    ) -> str:
+        """Show a modal approval dialog and return the user's choice.
+
+        The dialog body is pre-rendered ANSI text (typically a
+        Rich-rendered panel) — keeping the rendering decision in the
+        ``prompts`` module so this class doesn't need to know about
+        tool args.
+
+        Returns one of ``"approve"`` / ``"approve_always"`` /
+        ``"reject"``. The :mod:`quoriv.ui.prompts` wrapper converts
+        that into a full :class:`ApprovalDecision`.
+        """
+        if self._approval_future is not None:
+            raise RuntimeError("prompt_approval_modal() is already awaiting")
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        self._approval_future = future  # type: ignore[assignment]
+
+        modal_kb = KeyBindings()
+
+        def _resolve(choice: str) -> None:
+            if not future.done():
+                future.set_result(choice)
+
+        @modal_kb.add("a")
+        @modal_kb.add("y")
+        def _approve(event: Any) -> None:
+            _resolve("approve")
+
+        @modal_kb.add("A")
+        def _approve_always(event: Any) -> None:
+            _resolve("approve_always")
+
+        @modal_kb.add("r")
+        @modal_kb.add("n")
+        def _reject(event: Any) -> None:
+            _resolve("reject")
+
+        @modal_kb.add("escape")
+        @modal_kb.add("c-c")
+        def _cancel(event: Any) -> None:
+            _resolve("reject")
+
+        # Dialog body: ANSI panel + a one-line hint. Wrapped in a
+        # Window so prompt_toolkit can size it correctly.
+        body_label = Label(ANSI(body_text), dont_extend_height=True)
+        hint = Label(
+            ANSI("\n  [a] approve   [r] reject   [A] approve always   [Esc] cancel\n"),
+            dont_extend_height=True,
+        )
+        dialog = Dialog(
+            body=HSplit([body_label, hint], key_bindings=modal_kb),
+            title=title,
+            with_background=True,
+            modal=True,
+        )
+
+        modal_float = Float(content=dialog)
+        self._float_container.floats.append(modal_float)
+        # Stash the previous focus so we can restore it.
+        prev_focus = self.app.layout.current_window
+        with contextlib.suppress(Exception):  # pragma: no cover — headless fallback
+            self.app.layout.focus(dialog)
+        if not self.app.is_done:
+            self.app.invalidate()
+
+        try:
+            return await future
+        finally:
+            self._approval_future = None
+            with contextlib.suppress(ValueError):
+                self._float_container.floats.remove(modal_float)
+            if prev_focus is not None:
+                with contextlib.suppress(Exception):
+                    self.app.layout.focus(prev_focus)
+            if not self.app.is_done:
+                self.app.invalidate()
+
+    # ----- Internals ------------------------------------------------------
+
+    def _build_key_bindings(self) -> KeyBindings:
+        """Build the input-buffer keybindings.
+
+        Bindings only fire when the input buffer is focused — the
+        approval modal installs its own keybindings on its inner
+        container and owns focus while it's up, so ``Enter`` and
+        ``a``/``r``/``A`` route to the modal not here.
+        """
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _submit(event: Any) -> None:
+            # If an approval future is pending the modal owns its own
+            # keybindings; this handler is only reachable when the
+            # input buffer is focused.
+            fut = self._input_future
+            if fut is None or fut.done():
+                return
+            text = self._input_buffer.text
+            self._input_buffer.reset()
+            fut.set_result(text)
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _abort(event: Any) -> None:
+            fut = self._input_future
+            if fut is not None and not fut.done():
+                fut.set_exception(EOFError())
+                return
+            # No input prompt active — exit the app entirely.
+            self._exit_requested = True
+            event.app.exit()
+
+        @kb.add("escape", "enter")
+        def _newline(event: Any) -> None:
+            self._input_buffer.insert_text("\n")
+
+        return kb

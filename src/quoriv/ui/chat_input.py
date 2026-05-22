@@ -1,20 +1,21 @@
-"""Bordered-frame chat input — Phase 5 Slice 1 (UI rewrite).
+"""Bordered-frame chat input — Phase 5 Slices 1 and 2.
 
-Replaces the inline ``PromptSession.prompt_async`` call with a real
-``prompt_toolkit.Application`` whose layout puts the input
-``BufferControl`` inside a :class:`prompt_toolkit.widgets.Frame`. The
-visible result is the bordered "box" users see in Claude Code, Aider,
-and similar TUIs.
+Two distinct shapes of prompt_toolkit Application live here:
 
-Implementation notes:
+* :func:`build_chat_app` / :func:`prompt_boxed` build a **one-shot**
+  Application that handles a single input turn (the Slice 1 design).
+  Kept because unit tests use it to verify layout / keybindings
+  without spinning up the full persistent UI, and because callers
+  outside the chat loop (e.g. a future ``quoriv ask`` mode) might
+  want a single bordered prompt.
+* :class:`ChatApp` (re-exported from :mod:`quoriv.ui.chat_app`) is
+  the **persistent** Application that owns the chat session: input
+  buffer, streamed-response window, status toolbar, and overlay
+  Floats for HITL approval modals. This is what
+  :func:`quoriv.app.run_chat` drives in v1.2.0.
 
-* The Application is created **per turn** rather than living for the
-  whole chat. Between turns, Rich streams agent output to the
-  terminal normally — Rich and prompt_toolkit don't fight because
-  only one of them owns the terminal at any given moment. A
-  persistent Application with Rich output piped through prompt_toolkit
-  is a future enhancement; doing it correctly needs Live → Window
-  integration that we haven't built yet.
+Implementation notes for the one-shot helpers:
+
 * ``Ctrl+C`` / ``Ctrl+D`` raise :class:`EOFError` so the existing
   loop's exception handling in ``app._interactive_loop`` keeps
   working unchanged.
@@ -39,10 +40,14 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.widgets import Frame
 
+from quoriv.ui.chat_app import ChatApp
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from prompt_toolkit.completion import Completer
+
+__all__ = ["ChatApp", "build_chat_app", "prompt_boxed"]
 
 
 def build_chat_app(
