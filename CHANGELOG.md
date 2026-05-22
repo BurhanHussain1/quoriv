@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.1.0] — 2026-05-23
+
+### Added — Phase 5 Slice 1: chat UX polish + bordered input box
+
+- **New welcome banner** (`quoriv.ui.banner.render_welcome_banner`) — Rich Panel with ASCII Quoriv logo, centered tagline, key/value session context (model / mode / cwd / memory files), a two-column slash command grid (collapses to one column on narrow terminals), and the `/help` + `/exit` hint as the safety net.
+- **Bordered input box** (`quoriv.ui.chat_input.build_chat_app` + `prompt_boxed`) — replaces the inline `PromptSession.prompt_async` call with a real `prompt_toolkit.Application` whose layout puts the input `BufferControl` inside a `Frame` widget. The visible result is the bordered "box" users see in Claude Code, Aider, and similar TUIs.
+  - Application is constructed per-turn (not persistent) — between turns Rich streams agent output normally because only one of (Rich, prompt_toolkit) owns the terminal at any moment. Persistent Application with Rich `Live` piped through prompt_toolkit is queued for a future slice.
+  - Key bindings: **Enter** submits, **Ctrl-C / Ctrl-D** raise `EOFError` (matches `PromptSession` semantics so the existing chat loop's exit path keeps working), **Esc-Enter** (Alt+Enter on most terminals) inserts a newline for multi-line composition.
+  - `output` / `input` kwargs let tests inject `DummyOutput` + `create_pipe_input()` so the Application constructs without a real TTY.
+- **Slash-command autocomplete** (`quoriv.ui.slash_completer.SlashCommandCompleter`) — prompt_toolkit `Completer` that fires only when the buffer starts with `/` and the user hasn't moved past the command word. Description shows in the popup's meta column. Bails on `Tell me about /tmp/foo`-style freeform so chat prompts never see a slash popup. Case-insensitive prefix match.
+- **Shared input history across turns** — `_interactive_loop` now creates a single `InMemoryHistory` and reuses it, so up-arrow recall works the way users expect.
+
+### Changed
+
+- `quoriv.app._render_welcome` delegates to the richer banner renderer in `quoriv.ui.banner`. Memory files and the slash-command grid are surfaced inside the panel so users see available commands without typing `/help` first.
+- `quoriv.app._interactive_loop` swaps `PromptSession.prompt_async(HTML(">"))` for `prompt_boxed(...)` with the shared completer + history + bottom_toolbar. Removed now-unused `PromptSession` and `HTML` imports.
+- `TestWelcomePanel` tests in `test_app_slash.py` updated for the new Rich Table layout — legacy `"Memory:"` colon-syntax dropped; matches the bare `"Memory"` label in the new grid.
+
+### Deferred to a future slice
+
+- **Modal approval dialogs** — `Float`-managed overlay replacing the existing inline `prompt_approval()` flow. Requires the Application to be persistent.
+- **Scrolling output Window above the bordered input** — Rich `Live` streaming piped into a prompt_toolkit `Window` widget. Requires a `StreamRenderer` rewrite and persistent Application.
+  Both are tightly coupled (all-or-nothing) and warrant a dedicated session.
+
+### Tests
+
+- 27 new tests added in `tests/unit/ui/`:
+  - `test_banner.py` (7) — smoke, version / model / mode / cwd surfaced, memory row omitted when empty / shown when present, slash grid rendered, `/help` hint always present, `None` cwd handled.
+  - `test_slash_completer.py` (10) — empty buffer silent, non-slash silent, bare `/` lists everything, prefix filters, exact match self-completes, case-insensitive, description shown as meta, no-match empty, post-arg silent, freeform with embedded `/path` silent.
+  - `test_chat_input.py` (10) — `(app, buffer)` returned, layout has more than one Window (Frame contributes border windows), bottom_toolbar adds exactly one extra Window, completer / history wired to Buffer, default in-memory history, keybinding registry contains Enter / Ctrl-C / Ctrl-D / Esc-Enter, frame_title kwarg accepted, `prompt_boxed` is async with the documented kwargs.
+
+**Test count: 865 → 892** (+27). All 4 gates green.
+
+---
+
 ## [1.0.1] — 2026-05-19
 
 ### Fixed
