@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.4.1] — 2026-05-23
+
+### Fixed
+
+- **`/mode` picker no longer renders as "Window too small..." in narrow terminals.** The previous Float positioning forced `left=2, right=2` which made the picker claim a minimum width of `(terminal_cols - 4)` — when the mode option labels are wider than that, prompt_toolkit aborts and shows the overflow message. Dropped the `right=` constraint so the Float sizes to its content, and turned on `wrap_lines=True` on the body window so long labels fold instead of overflowing. Height dimension was relaxed (`min=len(options)`, no max) so wrapped lines have room to expand.
+
+---
+
 ## [1.4.0] — 2026-05-23
 
 ### Added — Inline argument typeahead (Claude-Code-style)

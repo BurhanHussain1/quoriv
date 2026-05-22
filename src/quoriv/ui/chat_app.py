@@ -704,9 +704,15 @@ class ChatApp:
         )
         body_window = Window(
             body_control,
-            wrap_lines=False,
+            # ``wrap_lines=True`` lets long option labels fold onto
+            # multiple lines instead of triggering prompt_toolkit's
+            # "Window too small..." overflow message in narrow
+            # terminals.
+            wrap_lines=True,
             dont_extend_height=True,
-            height=Dimension(min=len(options), max=len(options)),
+            # Height is at least one line per option but allowed to
+            # grow when wrapping kicks in.
+            height=Dimension(min=len(options)),
         )
         hint = Window(
             FormattedTextControl(text=ANSI(" up/down navigate  enter select  esc cancel ")),
@@ -720,10 +726,12 @@ class ChatApp:
         # full-screen modal feel.
         picker_frame = Frame(HSplit([body_window, hint]), title=title)
         # ``bottom=4`` places the float's bottom edge 4 lines above the
-        # screen bottom — that's input-frame-top + toolbar (3+1). The
-        # picker grows upward from there as more options are added.
-        # ``left=2`` mirrors the chat indent.
-        modal_float = Float(content=picker_frame, bottom=4, left=2, right=2)
+        # screen bottom — that's input-frame-top + toolbar (3+1).
+        # ``left=1`` mirrors the chat indent. ``right`` is intentionally
+        # omitted so the Float can size itself to its content (or shrink
+        # to whatever fits) instead of forcing a minimum width that
+        # narrow terminals can't honour.
+        modal_float = Float(content=picker_frame, bottom=4, left=1)
         self._float_container.floats.append(modal_float)
         prev_focus = self.app.layout.current_window
         with contextlib.suppress(Exception):  # pragma: no cover — headless fallback
