@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.3.1] — 2026-05-23
+
+### Changed
+
+- **Option picker now anchors above the input frame** instead of opening as a centred Dialog with a dim backdrop. Switched the `select_option_modal` overlay from `prompt_toolkit.widgets.Dialog` (with `with_background=True`) to a `Frame` placed in a `Float` at `bottom=4, left=2, right=2` — chat stays visible behind the popup, the popup hugs the input box, and the visual feels like Claude Code's inline dropdown instead of a centred modal. Keys (`↑` / `↓` / `Enter` / `Esc`), focus handling, and the cancel-returns-`None` contract are unchanged.
+
+---
+
 ## [1.3.0] — 2026-05-23
 
 ### Added — Phase 5 Slice 3: arrow-key option picker

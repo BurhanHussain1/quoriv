@@ -708,18 +708,22 @@ class ChatApp:
             dont_extend_height=True,
             height=Dimension(min=len(options), max=len(options)),
         )
-        hint = Label(
-            ANSI("\n  ↑/↓ navigate   Enter select   Esc cancel\n"),
-            dont_extend_height=True,
+        hint = Window(
+            FormattedTextControl(text=ANSI(" up/down navigate  enter select  esc cancel ")),
+            height=1,
+            style="class:completion-menu.meta",
         )
-        dialog = Dialog(
-            body=HSplit([body_window, hint]),
-            title=title,
-            with_background=True,
-            modal=True,
-        )
-
-        modal_float = Float(content=dialog)
+        # Slice 3 polish: render the picker as a Frame anchored just
+        # above the input box rather than a centred Dialog with a dim
+        # backdrop. The visual result is Claude-Code-style: chat stays
+        # visible behind the popup, popup hugs the input frame, no
+        # full-screen modal feel.
+        picker_frame = Frame(HSplit([body_window, hint]), title=title)
+        # ``bottom=4`` places the float's bottom edge 4 lines above the
+        # screen bottom — that's input-frame-top + toolbar (3+1). The
+        # picker grows upward from there as more options are added.
+        # ``left=2`` mirrors the chat indent.
+        modal_float = Float(content=picker_frame, bottom=4, left=2, right=2)
         self._float_container.floats.append(modal_float)
         prev_focus = self.app.layout.current_window
         with contextlib.suppress(Exception):  # pragma: no cover — headless fallback
