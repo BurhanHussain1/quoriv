@@ -37,6 +37,13 @@ PROVIDER_ENV_VARS: Final[dict[str, str]] = {
     "openrouter": "OPENROUTER_API_KEY",
     "together": "TOGETHER_API_KEY",
     "vllm": "VLLM_API_KEY",
+    # Phase 5 Slice 4: OpenAI-compatible third-party providers added
+    # for the /login onboarding flow. Each has its own API endpoint
+    # but uses the OpenAI SDK shape, so the model builders are thin
+    # ChatOpenAI wrappers with a custom base_url.
+    "deepseek": "DEEPSEEK_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
+    "grok": "XAI_API_KEY",
     # Phase 3 Slice 7: Tavily backs the ``web_search`` tool. Not a
     # model provider per se, but the key-resolution flow is the same
     # (env var first, then keychain) so we register it here.

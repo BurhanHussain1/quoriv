@@ -77,6 +77,66 @@ def load_config(cwd: Path | None = None) -> QuorivConfig:
 # ---------------------------------------------------------------------------
 
 
+def save_default_model(model_id: str) -> Path:
+    """Persist ``model_id`` as ``model.default`` in the global config.
+
+    Writes ``~/.quoriv/config.toml`` so the next ``quoriv chat`` picks
+    the chosen model without needing ``--model``. Existing keys in the
+    file are preserved — only ``[model] default`` is updated. The
+    directory is created if missing.
+
+    Returns:
+        The absolute path that was written.
+    """
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_toml(path) if path.is_file() else {}
+    model_section = dict(existing.get("model", {}))
+    model_section["default"] = model_id
+    existing["model"] = model_section
+    path.write_text(_format_toml(existing), encoding="utf-8")
+    return path
+
+
+def _format_toml(data: dict[str, Any]) -> str:
+    """Serialize a config dict to TOML.
+
+    We avoid taking a dependency on ``tomli-w`` for one writeback path —
+    the config is small and only ever has string / int / bool leaves
+    inside top-level tables, so a hand-rolled emitter is fine and keeps
+    the install footprint flat.
+    """
+    lines: list[str] = []
+    # Stable order: tables alphabetical, scalars first inside each.
+    scalars: dict[str, Any] = {k: v for k, v in data.items() if not isinstance(v, dict)}
+    tables: dict[str, dict[str, Any]] = {k: v for k, v in data.items() if isinstance(v, dict)}
+    for key, value in scalars.items():
+        lines.append(f"{key} = {_format_toml_value(value)}")
+    if scalars and tables:
+        lines.append("")
+    for table_name in sorted(tables):
+        lines.append(f"[{table_name}]")
+        for key, value in tables[table_name].items():
+            lines.append(f"{key} = {_format_toml_value(value)}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _format_toml_value(value: Any) -> str:
+    """Render a single TOML scalar."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, list):
+        return "[" + ", ".join(_format_toml_value(v) for v in value) + "]"
+    # Fallback — JSON-style repr for anything exotic.
+    return repr(value)
+
+
 def _read_toml(path: Path) -> dict[str, Any]:
     """Read a TOML file; return ``{}`` if the path doesn't exist."""
     if not path.is_file():

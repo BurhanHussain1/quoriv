@@ -38,6 +38,12 @@ _PROVIDERS: dict[str, str] = {
     "gemini": "quoriv.models.gemini:build",
     "vllm": "quoriv.models.vllm:build",
     "openrouter": "quoriv.models.openrouter:build",
+    # Phase 5 Slice 4: OpenAI-compatible third-parties (each is a
+    # thin ChatOpenAI wrapper with a custom base_url + its own
+    # keychain service / env var).
+    "deepseek": "quoriv.models.deepseek:build",
+    "kimi": "quoriv.models.kimi:build",
+    "grok": "quoriv.models.grok:build",
 }
 
 

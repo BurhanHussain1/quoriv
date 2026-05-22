@@ -86,6 +86,9 @@ SLASH_COMMANDS: dict[str, str] = {
     "/save": "Save the current thread under a name (default: first 8 chars of thread id)",
     "/load": "Switch to a saved thread by name (no arg lists saved sessions)",
     "/resume": "Switch to the most-recently-saved thread",
+    "/login": "Pick a provider + API key + model (interactive wizard)",
+    "/setup": "Alias for /login — change provider / model mid-session",
+    "/logout": "Remove the saved API key for the current provider",
     "/tools": "List the tools the agent has available",
     "/memory": "Show the status of memory files (~/.quoriv/memory.md, ./PROJECT.md)",
     "/mode": "Show permission mode (no arg) or live-switch (/mode <name>)",
@@ -174,6 +177,8 @@ async def run_chat(
     extra_tools = await load_mcp_tools(config.mcp.servers)
 
     async with AsyncSqliteSaver.from_conn_string(str(sessions_db)) as saver:
+        agent: Any | None = None
+        startup_needs_onboarding = False
         try:
             agent = build_agent(
                 config,
@@ -183,14 +188,22 @@ async def run_chat(
                 checkpointer=saver,
                 extra_tools=extra_tools,
             )
-        except MissingAPIKeyError as exc:
-            _render_missing_key(console, exc)
-            return
+        except MissingAPIKeyError:
+            # Slice 4: don't bail — the persistent UI will run the
+            # ``/login`` wizard on first tick so the user can set up
+            # a provider + key + model without having to ``Ctrl+C``,
+            # ``quoriv config set ...``, and re-launch.
+            startup_needs_onboarding = True
         except Exception as exc:  # pragma: no cover  # surfaces upstream errors
             console.print(f"[red]Failed to build agent for {model_id!r}:[/red] {exc}")
             return
 
         _render_welcome(console, model_id=model_id, mode=mode, cwd=cwd_path)
+        if startup_needs_onboarding:
+            console.print(
+                "[yellow]No API key configured.[/yellow]  "
+                "[dim]The /login wizard will open in a moment.[/dim]"
+            )
         await _interactive_loop(
             console,
             agent,
@@ -204,12 +217,13 @@ async def run_chat(
             checkpointer=saver,
             extra_tools=extra_tools,
             hooks=HookRegistry(),
+            startup_needs_onboarding=startup_needs_onboarding,
         )
 
 
 async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its layout + driver
     console: Console,
-    agent: Any,
+    agent: Any | None,
     registry: SessionRegistry,
     permission_mode: PermissionMode,
     *,
@@ -221,6 +235,7 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     extra_tools: list[Any] | None = None,
     hooks: HookRegistry | None = None,
+    startup_needs_onboarding: bool = False,
 ) -> None:
     """Run the prompt → agent → render cycle until the user exits.
 
@@ -300,10 +315,42 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
     # for legacy test entry points.
     ui_console = chat_app.console
 
-    nonlocal_agent: dict[str, Any] = {"agent": agent}
+    nonlocal_agent: dict[str, Any] = {"agent": agent, "model_id": model_id}
     tracer_ref: dict[str, TraceLogger] = {"tracer": tracer}
 
-    async def _driver() -> None:
+    async def _driver() -> None:  # noqa: PLR0912, PLR0915 — flat driver dispatch
+        # Slice 4: run the onboarding wizard before accepting normal
+        # chat input when the caller could not build an agent (no key
+        # configured). The user gets the same dropdown UX they would
+        # see from a mid-session ``/login``.
+        if startup_needs_onboarding:
+            result = await _run_onboarding(chat_app, ui_console)
+            if result is None:
+                ui_console.print(
+                    "[dim]Onboarding skipped — exit and re-run with --model "
+                    "or set an API key to start chatting.[/dim]"
+                )
+                return
+            new_provider, new_model = result
+            new_model_id = f"{new_provider}:{new_model}"
+            try:
+                nonlocal_agent["agent"] = build_agent(
+                    config,  # type: ignore[arg-type]
+                    model_override=new_model_id,
+                    cwd=cwd,
+                    mode=state["permission_mode"],
+                    checkpointer=checkpointer,
+                    extra_tools=extra_tools,
+                )
+                nonlocal_agent["model_id"] = new_model_id
+                ui_console.print(f"[green]Ready.[/green] [cyan]{new_model_id}[/cyan]")
+            except MissingAPIKeyError as exc:
+                _render_missing_key(ui_console, exc)
+                return
+            except Exception as exc:
+                ui_console.print(f"[red]Failed to build agent:[/red] {exc}")
+                return
+
         while True:
             try:
                 user_input = await chat_app.prompt_input()
@@ -331,13 +378,52 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
             # Bare ``/mode<Enter>`` falls through to ``_handle_mode``
             # below which prints the mode list to scrollback.
 
+            # Slice 4: async slash commands intercepted ahead of the
+            # sync dispatcher. ``/login`` / ``/setup`` / ``/logout``
+            # need to run the onboarding wizard which awaits the
+            # chat_app — can't go through the sync ``_handle_slash``.
+            lower_cmd = user_input.split(maxsplit=1)[0].lower()
+            if lower_cmd in {"/login", "/setup"}:
+                result = await _run_onboarding(chat_app, ui_console)
+                if result is not None:
+                    new_provider, new_model = result
+                    new_model_id = f"{new_provider}:{new_model}"
+                    if config is not None:
+                        try:
+                            nonlocal_agent["agent"] = build_agent(
+                                config,
+                                model_override=new_model_id,
+                                cwd=cwd,
+                                mode=state["permission_mode"],
+                                checkpointer=checkpointer,
+                                extra_tools=extra_tools,
+                            )
+                            # Persist for the rest of the session — the
+                            # closure-captured ``model_id`` is what the
+                            # status toolbar reads, so update it via the
+                            # nonlocal_agent dict.
+                            nonlocal_agent["model_id"] = new_model_id
+                            ui_console.print(
+                                f"[green]Now using[/green] [cyan]{new_model_id}[/cyan]."
+                            )
+                        except MissingAPIKeyError as exc:
+                            _render_missing_key(ui_console, exc)
+                        except Exception as exc:  # surface build failures
+                            ui_console.print(
+                                f"[red]Failed to switch to {new_model_id}:[/red] {exc}"
+                            )
+                continue
+            if lower_cmd == "/logout":
+                _logout_current_provider(nonlocal_agent.get("model_id", model_id), ui_console)
+                continue
+
             if user_input.startswith("/"):
                 command_result = _handle_slash(
                     ui_console,
                     user_input,
                     state["thread_id"],
                     registry,
-                    model_id=model_id,
+                    model_id=nonlocal_agent.get("model_id", model_id),
                     cwd=cwd,
                     mode=state["permission_mode"],
                     tracer=tracer_ref["tracer"],
@@ -405,6 +491,201 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
 # (``/mode `` → typeahead popup, Down + Enter to pick + submit).
 # :meth:`ChatApp.select_option_modal` is kept as a primitive for
 # future modal interactions but is no longer wired to any command.
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Slice 4: provider / model onboarding wizard
+# ---------------------------------------------------------------------------
+
+
+def _make_picker_completer(options: list[tuple[str, str]]) -> Any:
+    """Build a one-shot ``Completer`` that emits a fixed ``(value, meta)`` list.
+
+    Used by the onboarding flow to drive the in-buffer dropdown for
+    provider selection and model selection. Scoped to the wizard —
+    the chat loop's regular :class:`SlashCommandCompleter` is restored
+    when the prompt returns.
+    """
+    from prompt_toolkit.completion import Completer, Completion  # noqa: PLC0415
+
+    class _Picker(Completer):
+        def get_completions(self, document: Any, _complete_event: Any) -> Any:
+            prefix = document.text_before_cursor.lower()
+            for value, meta in options:
+                if value.lower().startswith(prefix) or prefix in value.lower():
+                    yield Completion(
+                        value,
+                        start_position=-len(document.text_before_cursor),
+                        display=value,
+                        display_meta=meta,
+                    )
+
+    return _Picker()
+
+
+async def _pick_from_options(
+    chat_app: ChatApp,
+    ui_console: Console,
+    *,
+    header: str,
+    options: list[tuple[str, str]],
+) -> str | None:
+    """Prompt the user to pick one of ``options`` via inline dropdown.
+
+    Prints ``header`` into scrollback above the input frame, then opens
+    the input prompt with a one-shot ``Completer`` over ``options``.
+    The completion menu pops open immediately so the user can
+    arrow-key through the list without typing.
+
+    Returns the chosen value, or ``None`` if the user cancelled
+    (Ctrl+C / Ctrl+D / empty submit).
+    """
+    if not options:
+        return None
+    ui_console.print()
+    ui_console.print(header)
+    completer = _make_picker_completer(options)
+    try:
+        raw = await chat_app.prompt_input(
+            completer=completer,
+            open_completion=True,
+        )
+    except (EOFError, KeyboardInterrupt):
+        return None
+    chosen = raw.strip()
+    if not chosen:
+        return None
+    valid = {value for value, _ in options}
+    if chosen not in valid:
+        # Best-effort fuzzy: case-insensitive exact match against the
+        # value column. If still no match, treat as cancel.
+        for value, _ in options:
+            if value.lower() == chosen.lower():
+                return value
+        return None
+    return chosen
+
+
+async def _prompt_api_key(
+    chat_app: ChatApp,
+    ui_console: Console,
+    *,
+    provider_name: str,
+) -> str | None:
+    """Ask the user to paste an API key (password-masked).
+
+    Returns the key string, or ``None`` if cancelled / empty.
+    """
+    ui_console.print()
+    ui_console.print(f"[bold]Paste your {provider_name} API key[/bold]  [dim](input hidden)[/dim]")
+    try:
+        raw = await chat_app.prompt_input(password=True)
+    except (EOFError, KeyboardInterrupt):
+        return None
+    key = raw.strip()
+    return key or None
+
+
+async def _run_onboarding(
+    chat_app: ChatApp,
+    ui_console: Console,
+    *,
+    require_key: bool = True,
+) -> tuple[str, str] | None:
+    """Full onboarding wizard: provider → API key → model.
+
+    Returns ``(provider_id, model_id)`` on success, or ``None`` if the
+    user cancelled anywhere in the flow. When ``require_key`` is
+    ``False``, the API-key step is skipped — used during ``/setup``
+    when the user only wants to switch models on an already-
+    configured provider.
+
+    Side effects: stores the API key in the keychain (if entered) and
+    persists ``model.default`` to ``~/.quoriv/config.toml``.
+    """
+    from quoriv.config import keychain  # noqa: PLC0415
+    from quoriv.config.loader import save_default_model  # noqa: PLC0415
+    from quoriv.providers import (  # noqa: PLC0415
+        get_provider,
+        model_choices,
+        provider_choices,
+    )
+
+    provider_id = await _pick_from_options(
+        chat_app,
+        ui_console,
+        header=(
+            "[bold cyan]Choose a provider[/bold cyan]  "
+            "[dim](up/down navigate · Enter select · Esc cancel)[/dim]"
+        ),
+        options=provider_choices(),
+    )
+    if provider_id is None:
+        ui_console.print("[dim]Onboarding cancelled.[/dim]")
+        return None
+
+    provider = get_provider(provider_id)
+    if provider is None:  # pragma: no cover — defensive
+        ui_console.print(f"[red]Unknown provider: {provider_id!r}[/red]")
+        return None
+
+    if require_key and not keychain.get_api_key(provider_id):
+        ui_console.print()
+        if provider.api_key_url:
+            ui_console.print(
+                f"[dim]Get a {provider.display_name} key at:[/dim] "
+                f"[cyan]{provider.api_key_url}[/cyan]"
+            )
+        key = await _prompt_api_key(chat_app, ui_console, provider_name=provider.display_name)
+        if not key:
+            ui_console.print("[dim]No key entered — onboarding cancelled.[/dim]")
+            return None
+        keychain.set_api_key(provider_id, key)
+        ui_console.print(f"[green]Saved {provider.display_name} key to OS keychain.[/green]")
+
+    model_id = await _pick_from_options(
+        chat_app,
+        ui_console,
+        header=f"[bold cyan]Choose a {provider.display_name} model[/bold cyan]  "
+        f"[dim](↑↓ navigate · Enter select · Esc cancel)[/dim]",
+        options=model_choices(provider_id),
+    )
+    if model_id is None:
+        ui_console.print("[dim]Model selection cancelled.[/dim]")
+        return None
+
+    full_id = f"{provider_id}:{model_id}"
+    path = save_default_model(full_id)
+    ui_console.print(
+        f"[green]Default model set to[/green] [cyan]{full_id}[/cyan]  [dim](saved to {path})[/dim]"
+    )
+    return provider_id, model_id
+
+
+def _logout_current_provider(model_id: str, ui_console: Console) -> None:
+    """Wipe the keychain entry for the provider portion of ``model_id``.
+
+    ``model_id`` is the active ``provider:model`` string. We only
+    remove the key — the saved ``model.default`` in ``config.toml`` is
+    left alone so the next ``/login`` can change it deliberately.
+    """
+    from quoriv.config import keychain  # noqa: PLC0415
+
+    provider_id, _, _ = model_id.partition(":")
+    if not provider_id:
+        ui_console.print("[red]/logout:[/red] no active provider")
+        return
+    removed = keychain.delete_api_key(provider_id)
+    if removed:
+        ui_console.print(
+            f"[green]Removed {provider_id} API key from the keychain.[/green]  "
+            f"[dim]Run /login to set up another provider.[/dim]"
+        )
+    else:
+        ui_console.print(
+            f"[dim]No keychain entry for {provider_id} (already logged out, or "
+            f"the key came from an env var — unset that to fully log out).[/dim]"
+        )
 
 
 def _build_status_line(

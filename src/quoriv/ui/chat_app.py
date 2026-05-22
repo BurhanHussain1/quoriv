@@ -223,7 +223,26 @@ class ChatApp:
             multiline=False,
             complete_while_typing=True,
         )
-        self._input_control = BufferControl(buffer=self._input_buffer)
+        # Slice 4: password masking is toggled by a mutable flag the
+        # ConditionalProcessor reads on every render. Flipping
+        # ``self._password_mode[0]`` swaps the input from "show
+        # characters" to "show stars" without rebuilding the control.
+        from prompt_toolkit.filters import Condition  # noqa: PLC0415
+        from prompt_toolkit.layout.processors import (  # noqa: PLC0415
+            ConditionalProcessor,
+            PasswordProcessor,
+        )
+
+        self._password_mode: list[bool] = [False]
+        self._input_control = BufferControl(
+            buffer=self._input_buffer,
+            input_processors=[
+                ConditionalProcessor(
+                    PasswordProcessor(),
+                    Condition(lambda: self._password_mode[0]),
+                ),
+            ],
+        )
         self._input_inner = Window(self._input_control, height=1, wrap_lines=False)
         self._input_frame = Frame(self._input_inner, title=frame_title)
 
@@ -400,8 +419,29 @@ class ChatApp:
 
     # ----- Input prompt ---------------------------------------------------
 
-    async def prompt_input(self) -> str:
+    async def prompt_input(
+        self,
+        *,
+        completer: Any = None,
+        password: bool = False,
+        open_completion: bool = False,
+    ) -> str:
         """Wait for the user to submit a line of input.
+
+        Args:
+            completer: Optional one-shot completer. Overrides the
+                buffer's default completer for the duration of this
+                prompt; restored on return so the chat loop's slash
+                completer is unaffected. Useful for picker prompts
+                during the ``/login`` flow.
+            password: When ``True`` the buffer renders typed
+                characters as ``*`` (still committed verbatim). Used
+                for API-key entry.
+            open_completion: When ``True``, programmatically open the
+                completion menu as soon as the prompt becomes active
+                so the dropdown is visible without the user typing a
+                character first. Pair with ``completer=`` for "pick
+                from list" prompts.
 
         Raises:
             EOFError: When the user pressed Ctrl+C or Ctrl+D — mirrors
@@ -410,12 +450,35 @@ class ChatApp:
         """
         if self._input_future is not None:
             raise RuntimeError("prompt_input() is already awaiting")
+
+        original_completer = self._input_buffer.completer
+        if completer is not None:
+            self._input_buffer.completer = completer
+        original_password = self._password_mode[0]
+        self._password_mode[0] = password
+
         loop = asyncio.get_running_loop()
         self._input_future = loop.create_future()
+
+        if open_completion and not self.app.is_done:
+            # Kick the completion menu open one event-loop tick after
+            # the prompt becomes active so the dropdown is visible
+            # without the user typing first. ``start_completion`` is
+            # safe to call when no completer is bound — it's a no-op
+            # in that case.
+            def _kick() -> None:
+                with contextlib.suppress(Exception):
+                    self._input_buffer.start_completion(select_first=True)
+                    self.app.invalidate()
+
+            loop.call_soon(_kick)
+
         try:
             return await self._input_future
         finally:
             self._input_future = None
+            self._input_buffer.completer = original_completer
+            self._password_mode[0] = original_password
 
     # ----- Stream window --------------------------------------------------
 

@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.0] — 2026-05-23
+
+### Added — Phase 5 Slice 4: provider onboarding wizard
+
+- **`/login` wizard** — three-step interactive flow inside the persistent ChatApp: pick provider → paste API key (masked) → pick model. Each picker is the same inline `CompletionsMenu` dropdown the v1.4.x slash commands use, so navigation is `↑/↓ + Enter` with no modal Float and no terminal-size constraints. The chosen model is persisted to `~/.quoriv/config.toml` and the running agent is rebuilt against the new key without restarting.
+- **`/setup` alias** — same wizard, runs mid-session. Useful for switching provider or model while keeping the conversation thread alive.
+- **`/logout`** — wipes the keychain entry for the **current** provider (the provider portion of `model.default`). The saved `model.default` is left in `config.toml` so the next `/login` starts from a known state.
+- **Auto-onboarding at startup** — if `build_agent` raises `MissingAPIKeyError` because no key is configured, `run_chat` no longer prints "no API key found" and exits. Instead it launches the persistent ChatApp with `agent=None` and runs the `/login` wizard as the driver's first action. After the user completes the wizard the agent is built and the session continues normally.
+- **New providers, with curated model lists** (verified via web search, May 2026):
+  - **DeepSeek** (`deepseek:*`) — OpenAI-compatible at `api.deepseek.com`. Models: `deepseek-v4-pro` (default), `deepseek-v4-flash`, `deepseek-v3.1`, `deepseek-r1`.
+  - **Kimi / Moonshot** (`kimi:*`) — OpenAI-compatible at `api.moonshot.ai/v1`. Models: `kimi-k2.6` (default), `kimi-k2.5`.
+  - **xAI Grok** (`grok:*`) — OpenAI-compatible at `api.x.ai/v1`. Models: `grok-4.3` (default), `grok-4.20-non-reasoning`.
+- **Refreshed model lists for existing providers:**
+  - OpenAI: `gpt-5.5` (default), `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`.
+  - Anthropic: `claude-sonnet-4-6` (default), `claude-opus-4-7`, `claude-haiku-4-5-20251001`.
+  - Gemini: `gemini-3.1-pro` (default), `gemini-3.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`.
+
+### New modules / APIs
+
+- **`src/quoriv/providers.py`** — `ProviderEntry` dataclass + `PROVIDERS` registry + `get_provider()` / `provider_choices()` / `model_choices()` accessors. The single source of truth for "what does the dropdown show."
+- **`src/quoriv/models/deepseek.py`**, **`kimi.py`**, **`grok.py`** — thin `ChatOpenAI` wrappers (each ~25 LOC) bound to the provider's OpenAI-compatible endpoint via `base_url=`. Registered in `quoriv.models.factory._PROVIDERS`.
+- **`quoriv.config.loader.save_default_model(model_id)`** — persists `[model] default = "<id>"` to `~/.quoriv/config.toml`, preserving the rest of the file. Hand-rolled minimal TOML emitter avoids adding a `tomli-w` dependency.
+- **`ChatApp.prompt_input(completer=None, password=False, open_completion=False)`** — extended with three new kwargs:
+  - `completer=` swaps the buffer's completer for the duration of the prompt (restored on return) — used by the picker steps.
+  - `password=True` flips a `ConditionalProcessor`/`PasswordProcessor` pair on the input control so keystrokes render as `*` while the underlying text is committed verbatim.
+  - `open_completion=True` schedules `Buffer.start_completion(select_first=True)` on the next event-loop tick so the dropdown is visible without the user typing first.
+
+### Design rationale
+
+- **Static curated list, not `models.list()` at runtime.** The provider API's `models.list()` returns 60+ IDs for OpenAI alone, mostly dated snapshots like `gpt-5-2026-01-08` that users don't want to choose from. A short hand-picked list ships in `providers.py` and gets refreshed per release. Reasoning is documented in the module docstring.
+- **OpenAI-compatible third-parties via `base_url=`.** DeepSeek, Kimi, and xAI all serve the OpenAI Chat Completions API shape, so each provider is a ~25-line `ChatOpenAI` wrapper instead of a fresh SDK integration. Their keychain entries / env vars are separate (`DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, `XAI_API_KEY`) so users can mix and match.
+- **Onboarding runs inside the persistent ChatApp**, not as a pre-launch CLI prompt. This gives identical UX whether the wizard fires at startup (no key configured) or mid-session via `/login` — same dropdowns, same key bindings, same scrollback.
+- **Async dispatch path for `/login` / `/setup` / `/logout`.** The sync `_handle_slash` dispatcher can't `await` the wizard, so the driver intercepts these three commands before slash dispatch and runs the async onboarding helper directly.
+
+### Tests
+
+- `tests/unit/test_providers.py` (7) — registry order preserved, every provider has at least one model, curated defaults spot-checked, unknown lookups return `None`/`[]`, `ProviderEntry` is frozen.
+
+**Test count: 913 → 920** (+7). All gates green.
+
+---
+
 ## [1.4.2] — 2026-05-23
 
 ### Fixed
