@@ -34,8 +34,6 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
 
 from quoriv.core import (
     SessionRegistry,
@@ -255,17 +253,22 @@ async def _interactive_loop(
     # Phase 5 Slice 1: typing `/` pops a completer with every known
     # slash command + its one-line description, so users don't have
     # to remember the catalogue.
+    from prompt_toolkit.history import InMemoryHistory  # noqa: PLC0415  (lazy import)
+
+    from quoriv.ui.chat_input import prompt_boxed  # noqa: PLC0415  (lazy import)
     from quoriv.ui.slash_completer import SlashCommandCompleter  # noqa: PLC0415  (lazy import)
 
-    session: PromptSession[str] = PromptSession(
-        bottom_toolbar=_toolbar,
-        completer=SlashCommandCompleter(SLASH_COMMANDS),
-        complete_while_typing=True,
-    )
+    completer = SlashCommandCompleter(SLASH_COMMANDS)
+    # Shared across turns so up-arrow recall works the way users expect.
+    history = InMemoryHistory()
 
     while True:
         try:
-            user_input = await session.prompt_async(HTML("<ansigreen>></ansigreen> "))
+            user_input = await prompt_boxed(
+                completer=completer,
+                history=history,
+                bottom_toolbar=_toolbar,
+            )
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Goodbye.[/dim]")
             return
