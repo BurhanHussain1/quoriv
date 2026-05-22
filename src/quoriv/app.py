@@ -303,6 +303,23 @@ async def _interactive_loop(
             # disappears before the response streams in.
             ui_console.print(f"\n[bold magenta]>[/bold magenta] {user_input}")
 
+            # Slice 3: arrow-key picker for slash commands that take an
+            # argument from a known finite set. ``/mode`` alone opens a
+            # picker over the four permission modes; ``/load`` alone
+            # opens a picker over saved sessions. Either rewrites
+            # ``user_input`` to ``/cmd <choice>`` and falls through to
+            # the normal dispatcher, so the picker is purely additive
+            # — typing ``/mode auto`` directly still works.
+            user_input = await _expand_slash_with_picker(
+                user_input,
+                chat_app=chat_app,
+                registry=registry,
+                current_mode=state["permission_mode"],
+                ui_console=ui_console,
+            )
+            if not user_input:
+                continue
+
             if user_input.startswith("/"):
                 command_result = _handle_slash(
                     ui_console,
@@ -369,6 +386,72 @@ async def _interactive_loop(
                 continue
 
     await chat_app.run(_driver)
+
+
+async def _expand_slash_with_picker(  # noqa: PLR0911 — picker dispatch is a flat switch
+    user_input: str,
+    *,
+    chat_app: ChatApp,
+    registry: SessionRegistry,
+    current_mode: PermissionMode,
+    ui_console: Console,
+) -> str:
+    """Open an arrow-key picker for bare ``/mode`` / ``/load`` commands.
+
+    Returns the rewritten command (``/mode <choice>`` or ``/load <choice>``)
+    when the user picks an option. Returns ``user_input`` unchanged when:
+
+    * the command isn't one we know how to expand,
+    * the command already has an argument,
+    * the user cancels the picker (``Esc`` / ``Ctrl+C``) — empty string
+      is returned so the driver skips the dispatch for this turn.
+
+    Kept in a helper so the driver loop stays readable and the same
+    expansion logic can be unit-tested without driving the full
+    Application.
+    """
+    if not user_input.startswith("/"):
+        return user_input
+    parts = user_input.split(maxsplit=1)
+    cmd = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if arg:
+        return user_input
+
+    if cmd == "/mode":
+        mode_options: list[tuple[str, str]] = [
+            (mode, f"{mode:<10} — {_MODE_DESCRIPTIONS[mode]}") for mode in ALLOWED_MODES
+        ]
+        choice = await chat_app.select_option_modal(
+            title="Permission mode",
+            options=mode_options,
+            current=current_mode,
+        )
+        if choice is None:
+            ui_console.print("[dim]Mode unchanged.[/dim]")
+            return ""
+        return f"/mode {choice}"
+
+    if cmd == "/load":
+        sessions = registry.list_named()
+        if not sessions:
+            # Fall through to the existing "no saved sessions" message
+            # printed by ``_handle_load``.
+            return user_input
+        sorted_sessions = sorted(sessions, key=lambda s: s.saved_at, reverse=True)
+        options: list[tuple[str, str]] = [
+            (s.name, f"{s.name:<24}  {s.saved_at}  {s.thread_id[:8]}") for s in sorted_sessions
+        ]
+        choice = await chat_app.select_option_modal(
+            title="Load saved session",
+            options=options,
+        )
+        if choice is None:
+            ui_console.print("[dim]Load cancelled.[/dim]")
+            return ""
+        return f"/load {choice}"
+
+    return user_input
 
 
 def _build_status_line(

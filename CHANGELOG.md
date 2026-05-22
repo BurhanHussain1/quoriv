@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.3.0] — 2026-05-23
+
+### Added — Phase 5 Slice 3: arrow-key option picker
+
+- **`ChatApp.select_option_modal(title, options, current=None) -> str | None`** — Float-based dropdown picker overlaid on the persistent Application. Keys: `↑` / `↓` (also `Home` / `End` / `PageUp` / `PageDown`) move the highlight, `Enter` confirms, `Esc` / `Ctrl+C` cancel. Returns the chosen value or `None` on cancel. The currently active option (e.g. the current permission mode) is pre-highlighted when passed via `current=`.
+- **`/mode` with no argument opens the mode picker** instead of just printing the list. The user arrow-keys to `read-only` / `ask` / `auto` / `yolo`, hits Enter, and the agent rebuilds against the same checkpointer — same flow as `/mode auto` typed directly, just discoverable. Cancelling leaves the mode unchanged.
+- **`/load` with no argument opens the saved-session picker** when at least one session is saved. Sessions are listed newest-first with name + timestamp + short thread id. Cancelling skips the load. When no sessions exist the original "no saved sessions" hint still prints.
+- Direct argument forms (`/mode auto`, `/load <name>`) still work without opening a picker — the new flow is purely additive.
+
+### Changed
+
+- Global Enter / Ctrl+C / Esc-Enter bindings now guard against firing while a modal Float has focus. Without the guard, pressing Enter inside a picker would also submit the (empty) input buffer behind it; pressing Ctrl+C inside a picker would tear the whole Application down.
+- `_driver` calls `_expand_slash_with_picker(...)` before slash dispatch — a small helper that detects bare `/mode` / `/load` and rewrites the command to its picker-resolved form. The dispatcher (`_handle_slash`) itself is unchanged.
+
+---
+
 ## [1.2.2] — 2026-05-23
 
 ### Fixed

@@ -78,7 +78,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from prompt_toolkit.completion import Completer
 
@@ -223,8 +223,8 @@ class ChatApp:
             complete_while_typing=True,
         )
         self._input_control = BufferControl(buffer=self._input_buffer)
-        input_inner = Window(self._input_control, height=1, wrap_lines=False)
-        self._input_frame = Frame(input_inner, title=frame_title)
+        self._input_inner = Window(self._input_control, height=1, wrap_lines=False)
+        self._input_frame = Frame(self._input_inner, title=frame_title)
 
         # Stream window — dynamic height that grows with content. The
         # ``height=Dimension(min=0)`` lets the window collapse to zero
@@ -267,7 +267,7 @@ class ChatApp:
         app_kwargs: dict[str, Any] = {
             "layout": Layout(
                 self._float_container,
-                focused_element=input_inner,
+                focused_element=self._input_inner,
             ),
             "key_bindings": self._key_bindings,
             "full_screen": False,
@@ -599,6 +599,145 @@ class ChatApp:
             if not self.app.is_done:
                 self.app.invalidate()
 
+    # ----- Option picker --------------------------------------------------
+
+    async def select_option_modal(  # noqa: PLR0915 — small inline picker scope
+        self,
+        *,
+        title: str,
+        options: Sequence[tuple[str, str]],
+        current: str | None = None,
+    ) -> str | None:
+        """Show an arrow-key dropdown picker and return the chosen value.
+
+        Args:
+            title: Header shown at the top of the Dialog.
+            options: List of ``(value, label)`` pairs. ``value`` is
+                what gets returned; ``label`` is what the user sees.
+            current: Optional value that should be pre-highlighted —
+                useful for ``/mode`` where we want the active mode
+                selected by default.
+
+        Returns:
+            The chosen ``value`` or ``None`` when the user cancels
+            (Esc / Ctrl+C). Returns ``None`` immediately when
+            ``options`` is empty (no choices → no picker).
+
+        Bindings:
+            * ``↑`` / ``↓`` move the highlight.
+            * ``Home`` / ``End`` jump to the first / last item.
+            * ``Enter`` confirms.
+            * ``Esc`` or ``Ctrl+C`` cancel.
+
+        While the picker is up the input buffer's bindings are
+        suspended (the focus guard in :meth:`_build_key_bindings`
+        skips them), so the up/down/enter keys go to the picker only.
+        """
+        if not options:
+            return None
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str | None] = loop.create_future()
+
+        # Pre-select ``current`` when supplied.
+        initial_idx = 0
+        if current is not None:
+            for i, (value, _label) in enumerate(options):
+                if value == current:
+                    initial_idx = i
+                    break
+        state: dict[str, int] = {"index": initial_idx}
+
+        def render() -> list[tuple[str, str]]:
+            fragments: list[tuple[str, str]] = []
+            for i, (_value, label) in enumerate(options):
+                if i == state["index"]:
+                    fragments.append(("reverse bold", f" > {label} \n"))
+                else:
+                    fragments.append(("", f"   {label} \n"))
+            return fragments
+
+        kb = KeyBindings()
+
+        def _resolve(value: str | None) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        @kb.add("up")
+        def _up(event: Any) -> None:
+            if state["index"] > 0:
+                state["index"] -= 1
+                event.app.invalidate()
+
+        @kb.add("down")
+        def _down(event: Any) -> None:
+            if state["index"] < len(options) - 1:
+                state["index"] += 1
+                event.app.invalidate()
+
+        @kb.add("home")
+        @kb.add("pageup")
+        def _top(event: Any) -> None:
+            state["index"] = 0
+            event.app.invalidate()
+
+        @kb.add("end")
+        @kb.add("pagedown")
+        def _bottom(event: Any) -> None:
+            state["index"] = len(options) - 1
+            event.app.invalidate()
+
+        @kb.add("enter")
+        def _select(event: Any) -> None:
+            _resolve(options[state["index"]][0])
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        def _cancel(event: Any) -> None:
+            _resolve(None)
+
+        body_control = FormattedTextControl(
+            text=render,
+            focusable=True,
+            show_cursor=False,
+            key_bindings=kb,
+        )
+        body_window = Window(
+            body_control,
+            wrap_lines=False,
+            dont_extend_height=True,
+            height=Dimension(min=len(options), max=len(options)),
+        )
+        hint = Label(
+            ANSI("\n  ↑/↓ navigate   Enter select   Esc cancel\n"),
+            dont_extend_height=True,
+        )
+        dialog = Dialog(
+            body=HSplit([body_window, hint]),
+            title=title,
+            with_background=True,
+            modal=True,
+        )
+
+        modal_float = Float(content=dialog)
+        self._float_container.floats.append(modal_float)
+        prev_focus = self.app.layout.current_window
+        with contextlib.suppress(Exception):  # pragma: no cover — headless fallback
+            self.app.layout.focus(body_window)
+        if not self.app.is_done:
+            self.app.invalidate()
+
+        try:
+            return await future
+        finally:
+            with contextlib.suppress(ValueError):
+                self._float_container.floats.remove(modal_float)
+            if prev_focus is not None:
+                with contextlib.suppress(Exception):
+                    self.app.layout.focus(prev_focus)
+            if not self.app.is_done:
+                self.app.invalidate()
+
     # ----- Internals ------------------------------------------------------
 
     def _build_key_bindings(self) -> KeyBindings:
@@ -611,11 +750,19 @@ class ChatApp:
         """
         kb = KeyBindings()
 
+        def _input_focused(event: Any) -> bool:
+            """True when the chat input buffer owns focus.
+
+            Used to guard global bindings so they don't fire while a
+            modal Float (approval, option picker) is up and has
+            installed its own keybindings.
+            """
+            return event.app.layout.current_control is self._input_control
+
         @kb.add("enter")
         def _submit(event: Any) -> None:
-            # If an approval future is pending the modal owns its own
-            # keybindings; this handler is only reachable when the
-            # input buffer is focused.
+            if not _input_focused(event):
+                return
             fut = self._input_future
             if fut is None or fut.done():
                 return
@@ -626,6 +773,9 @@ class ChatApp:
         @kb.add("c-c")
         @kb.add("c-d")
         def _abort(event: Any) -> None:
+            if not _input_focused(event):
+                # A modal is focused — let its own bindings handle it.
+                return
             fut = self._input_future
             if fut is not None and not fut.done():
                 fut.set_exception(EOFError())
@@ -636,6 +786,8 @@ class ChatApp:
 
         @kb.add("escape", "enter")
         def _newline(event: Any) -> None:
+            if not _input_focused(event):
+                return
             self._input_buffer.insert_text("\n")
 
         return kb
