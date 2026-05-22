@@ -73,6 +73,7 @@ from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.widgets import Dialog, Frame, Label
 from rich.console import Console
 from rich.markdown import Markdown
@@ -257,9 +258,25 @@ class ChatApp:
         # both the stream and the input box. Modals are installed by
         # appending to ``self._float_container.floats`` and removed in
         # the awaiting coroutine's ``finally``.
+        #
+        # The persistent ``CompletionsMenu`` Float is the inline
+        # autocomplete popup that fires while the user types: without
+        # it, ``complete_while_typing=True`` on the input buffer has
+        # nowhere to render its suggestions. ``xcursor=True`` /
+        # ``ycursor=True`` anchor the menu at the buffer's cursor; in
+        # inline mode prompt_toolkit positions it above the cursor
+        # when there isn't enough room below, which is exactly what
+        # we want — the menu pops upward into terminal scrollback so
+        # the chat content stays visible.
         self._float_container = FloatContainer(
             content=HSplit(children),
-            floats=[],
+            floats=[
+                Float(
+                    xcursor=True,
+                    ycursor=True,
+                    content=CompletionsMenu(max_height=10, scroll_offset=1),
+                ),
+            ],
         )
 
         self._key_bindings = self._build_key_bindings()

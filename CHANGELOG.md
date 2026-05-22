@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.4.2] — 2026-05-23
+
+### Fixed
+
+- **Inline autocomplete popup actually appears now.** The v1.4.0 completer was emitting completions but the layout had no `CompletionsMenu` widget to render them — the popup never showed. Added a persistent `Float(content=CompletionsMenu(max_height=10), xcursor=True, ycursor=True)` to the `ChatApp`'s `FloatContainer` so suggestions render anchored to the buffer cursor, popping upward into terminal scrollback when there isn't room below.
+- **No more "Window too small..." on bare `/mode`.** Removed the post-submit `select_option_modal` dispatch for `/mode` and `/load`. The picker rendered as an empty black rectangle / overflow error in the inline Application's tiny reserved area; with the inline completion menu now working, discoverable selection happens through the autocomplete popup instead. Typing `/mode ` (space) opens the menu; arrow keys + Enter pick + submit in one keystroke. Bare `/mode<Enter>` still falls through to `_handle_mode` which prints the mode list to scrollback.
+
+`select_option_modal` is retained on `ChatApp` as a primitive for future modal interactions but is no longer wired to any slash command.
+
+---
+
 ## [1.4.1] — 2026-05-23
 
 ### Fixed
