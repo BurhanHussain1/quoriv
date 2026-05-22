@@ -550,18 +550,20 @@ class TestBuildStatusLine:
 class TestWelcomePanel:
     def test_omits_memory_line_when_no_files_present(self, fake_home: Path, tmp_path: Path) -> None:
         # Without a PROJECT.md or ~/.quoriv/memory.md, the welcome
-        # panel must not show a memory line — keeps the welcome quiet
-        # for first-time users.
+        # banner must not show a "Memory" row — keeps the welcome quiet
+        # for first-time users. Phase 5 Slice 1 dropped the legacy
+        # "Memory:" colon syntax when the welcome moved to a Rich
+        # Table layout; only the "Memory" label remains.
         console, buf = _make_console()
         _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
-        assert "Memory:" not in buf.getvalue()
+        assert "Memory" not in buf.getvalue()
 
     def test_shows_project_md_when_present(self, fake_home: Path, tmp_path: Path) -> None:
         (tmp_path / "PROJECT.md").write_text("# project\n", encoding="utf-8")
         console, buf = _make_console()
         _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
         output = buf.getvalue()
-        assert "Memory:" in output
+        assert "Memory" in output
         assert "PROJECT.md" in output
 
     def test_shows_global_memory_md_when_present(self, fake_home: Path, tmp_path: Path) -> None:
@@ -571,5 +573,5 @@ class TestWelcomePanel:
         console, buf = _make_console()
         _render_welcome(console, model_id="openai:gpt-5", mode="ask", cwd=tmp_path)
         output = buf.getvalue()
-        assert "Memory:" in output
+        assert "Memory" in output
         assert "memory.md" in output
