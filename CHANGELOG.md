@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.10] — 2026-05-23
+
+### CI
+
+- Apply `ruff format` to `tests/unit/test_thinking_blocks.py` (added in v1.5.8). CI lint was failing `ruff format --check .` on that file; pure cosmetic reflow with no semantic change.
+
+---
+
 ## [1.5.9] — 2026-05-23
 
 ### CI

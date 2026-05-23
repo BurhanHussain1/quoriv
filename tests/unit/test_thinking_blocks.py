@@ -32,19 +32,23 @@ class TestChunkBlocksStructured:
         assert thinking == ""
 
     def test_anthropic_thinking_block(self) -> None:
-        chunk = _FakeChunk([
-            {"type": "thinking", "thinking": "Let me reason about this"},
-            {"type": "text", "text": "The answer is 42"},
-        ])
+        chunk = _FakeChunk(
+            [
+                {"type": "thinking", "thinking": "Let me reason about this"},
+                {"type": "text", "text": "The answer is 42"},
+            ]
+        )
         text, thinking = _chunk_blocks(chunk, {"in_thinking": False, "carry": ""})
         assert text == "The answer is 42"
         assert thinking == "Let me reason about this"
 
     def test_openai_reasoning_block(self) -> None:
-        chunk = _FakeChunk([
-            {"type": "reasoning", "text": "Working through the constraints"},
-            {"type": "text", "text": "Done."},
-        ])
+        chunk = _FakeChunk(
+            [
+                {"type": "reasoning", "text": "Working through the constraints"},
+                {"type": "text", "text": "Done."},
+            ]
+        )
         text, thinking = _chunk_blocks(chunk, {"in_thinking": False, "carry": ""})
         assert text == "Done."
         assert thinking == "Working through the constraints"
