@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.9] — 2026-05-23
+
+### CI
+
+- **`binaries.yml` build job: explicit `permissions: contents: read`.** v1.5.8's binaries workflow died on the Windows matrix with ``fatal: could not read Username for 'https://github.com'`` — `actions/checkout@v4` couldn't attach the runner's GITHUB_TOKEN because the default permission set in our repo configuration didn't include `contents: read` for that job. Declaring it explicitly fixes the auth.
+- **`binaries.yml` attach-to-release: explicit `token:`** for `softprops/action-gh-release@v2`, mirroring the v1.5.6 fix in `release.yml`.
+
+No code changes vs v1.5.8.
+
+---
+
 ## [1.5.8] — 2026-05-23
 
 ### Added — Thinking / reasoning surfacing

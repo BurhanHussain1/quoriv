@@ -22,6 +22,13 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Explicit read permission so actions/checkout can attach the
+    # runner's GITHUB_TOKEN. Without this the v1.5.8 run died with
+    # "could not read Username for 'https://github.com'" on the
+    # Windows matrix — the default permission set didn't include
+    # ``contents: read`` for this job in our repo's configuration.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -98,5 +105,9 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
+          # Same explicit-token treatment as release.yml (v1.5.6
+          # fix) so the action doesn't choke on default GITHUB_TOKEN
+          # lookup.
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: dist-binaries/*
           fail_on_unmatched_files: true
