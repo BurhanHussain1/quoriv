@@ -70,7 +70,7 @@ def _walk_python_symbols(
     """Yield matching symbol records from a parsed Python AST."""
     matches: list[dict[str, Any]] = []
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             if node.name == target:
                 matches.append(
                     {

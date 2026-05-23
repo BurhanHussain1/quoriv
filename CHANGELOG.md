@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.1] — 2026-05-23
+
+### Fixed
+
+- **Ruff lint failures on `main`.** `tests/unit/test_providers.py` had two inline `import dataclasses` / `__import__("pytest")` calls that tripped `PLC0415` (`import` should be at the top-level of a file). Moved them to the module imports.
+- **Pre-existing UP038 violations** in `observability/trace.py` and `tools/ast_tools.py` — converted three `isinstance(x, (A, B))` tuple calls to the union-syntax `isinstance(x, A | B)` that newer ruff flags by default. These had silently passed CI on older ruff but started failing once `ruff>=0.6.0` resolved to 0.12.x.
+
+---
+
 ## [1.5.0] — 2026-05-23
 
 ### Added — Phase 5 Slice 4: provider onboarding wizard

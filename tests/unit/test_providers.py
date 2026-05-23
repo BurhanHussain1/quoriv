@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
+
+import pytest
+
 from quoriv.providers import (
     PROVIDERS,
     ProviderEntry,
@@ -74,7 +78,5 @@ class TestProviderRegistry:
             api_key_url="",
             models=["a"],
         )
-        import dataclasses
-
-        with __import__("pytest").raises(dataclasses.FrozenInstanceError):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             p.id = "y"  # type: ignore[misc]
