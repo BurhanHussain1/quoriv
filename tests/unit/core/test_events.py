@@ -44,18 +44,44 @@ class TestRenderToken:
 
 
 class TestRenderToolStart:
-    def test_includes_tool_name(self) -> None:
+    def test_known_tool_uses_human_label(self) -> None:
+        # v1.5.7: ``read_file`` no longer renders as
+        # ``read_file file_path='/foo.py'`` — it shows ``Reading
+        # /foo.py``. The file path stays in the output for context,
+        # but the raw ``read_file`` / ``file_path`` keys are dropped.
         console, buf = _make_console()
         render_tool_start(console, "read_file", {"file_path": "/foo.py"})
         out = buf.getvalue()
-        assert "read_file" in out
-
-    def test_includes_args(self) -> None:
-        console, buf = _make_console()
-        render_tool_start(console, "read_file", {"file_path": "/foo.py"})
-        out = buf.getvalue()
-        assert "file_path" in out
+        assert "Reading" in out
         assert "/foo.py" in out
+
+    def test_ls_label(self) -> None:
+        console, buf = _make_console()
+        render_tool_start(console, "ls", {"path": "/src"})
+        out = buf.getvalue()
+        assert "Listing" in out
+        assert "/src" in out
+
+    def test_grep_label_shows_pattern(self) -> None:
+        console, buf = _make_console()
+        render_tool_start(console, "grep", {"pattern": "TODO"})
+        out = buf.getvalue()
+        assert "Searching" in out
+        assert "TODO" in out
+
+    def test_execute_label_shows_command(self) -> None:
+        console, buf = _make_console()
+        render_tool_start(console, "execute", {"command": "pytest -q"})
+        out = buf.getvalue()
+        assert "Running" in out
+        assert "pytest" in out
+
+    def test_unknown_tool_falls_back_to_name(self) -> None:
+        # Custom tools (web, AST, MCP, …) keep the raw name in the
+        # generic-label branch so the user still has context.
+        console, buf = _make_console()
+        render_tool_start(console, "custom_tool", {"flag": True})
+        assert "custom_tool" in buf.getvalue()
 
     def test_non_dict_args_does_not_crash(self) -> None:
         console, buf = _make_console()

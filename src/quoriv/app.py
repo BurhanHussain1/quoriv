@@ -1263,7 +1263,7 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
                     )
                 if hooks is not None:
                     hooks.fire("post_tool", tool_name=tool_name, output=output)
-                render_tool_end(console, output)
+                render_tool_end(console, output, name=tool_name)
                 continue
     finally:
         if chat_app is not None:

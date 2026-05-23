@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.7] — 2026-05-23
+
+### Changed — Claude-Code-style tool feedback
+
+- **One-line human labels for every tool call.** Replaced the raw ``→ tool_name(arg=value, …)`` dump with a contextual one-liner — ``• Reading /a.py``, ``• Listing /``, ``• Searching for 'foo'``, ``• Running pytest -q``, ``• Delegating to researcher: <description>``, ``• Fetching <url>``, etc. The full args / output JSON the agent passes around no longer floods scrollback.
+- **Tool output is silent by default.** ``read_file`` / ``ls`` / ``glob`` / ``grep`` no longer re-render their results to the chat — the agent quotes the relevant bits in its next message anyway. ``execute`` still shows shell output (compact, max 10 lines, non-zero exit codes flagged in red) because that's typically the point of the call. Custom / unknown tools fall back to a short truncated excerpt so failures stay visible.
+- **Todo-list rendering for ``write_todos``.** DeepAgents' ``TodoListMiddleware`` exposes a ``write_todos`` tool whose payload is a list of ``{content, status}`` entries. Quoriv now renders it as a ``Plan`` section with checkbox markers — ``[x]`` for completed (green strikethrough), ``[~]`` for in-progress (yellow bold), ``[ ]`` for pending — so the user can follow the agent's plan as it executes long-running tasks.
+
+### Internal
+
+- ``render_tool_end`` now takes an optional ``name=`` so the renderer can pick a per-tool strategy. The old call-without-name path still works (treated as a generic tool) for any external callers.
+- ``tests/unit/core/test_events.py`` rewritten to assert on the human labels instead of the raw arg dump.
+
+---
+
 ## [1.5.6] — 2026-05-23
 
 ### CI
