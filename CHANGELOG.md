@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.4] — 2026-05-23
+
+### Fixed
+
+- **Bottom status line now reflects the model the user just chose.** The toolbar closure read the function-local ``model_id`` parameter captured at ``_interactive_loop`` entry, so it stayed pinned to whatever ``config.model.default`` resolved to (typically ``openai:gpt-4.1``) even after ``/login`` switched to a new provider/model and printed ``Ready. openai:gpt-5.4``. Moved ``model_id`` into the mutable ``state`` dict that the toolbar already reads from for thread + permission mode; both the startup-onboarding path and mid-session ``/login`` now write the new id there. The toolbar updates on the next redraw — no relaunch needed.
+
+---
+
 ## [1.5.3] — 2026-05-23
 
 ### Changed

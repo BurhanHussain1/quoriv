@@ -263,15 +263,16 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
 
     # Mutable state captured in the toolbar closure — Python closures
     # resolve names at call time, so the bottom toolbar always reflects
-    # the *current* thread and permission mode.
+    # the *current* thread, model and permission mode.
     state: dict[str, Any] = {
         "thread_id": thread_id,
         "permission_mode": permission_mode,
+        "model_id": model_id,
     }
 
     def _toolbar() -> str:
         return _build_status_line(
-            model_id=model_id,
+            model_id=state["model_id"],
             mode=state["permission_mode"],
             cwd=cwd,
             thread_id=state["thread_id"],
@@ -331,6 +332,7 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
                     extra_tools=extra_tools,
                 )
                 nonlocal_agent["model_id"] = new_model_id
+                state["model_id"] = new_model_id
                 ui_console.print(f"[green]Ready.[/green] [cyan]{new_model_id}[/cyan]")
             except MissingAPIKeyError as exc:
                 _render_missing_key(ui_console, exc)
@@ -436,10 +438,11 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
                                 extra_tools=extra_tools,
                             )
                             # Persist for the rest of the session — the
-                            # closure-captured ``model_id`` is what the
-                            # status toolbar reads, so update it via the
-                            # nonlocal_agent dict.
+                            # toolbar closure reads ``state["model_id"]``
+                            # so updating it here flips the bottom
+                            # status line on the next redraw.
                             nonlocal_agent["model_id"] = new_model_id
+                            state["model_id"] = new_model_id
                             ui_console.print(
                                 f"[green]Now using[/green] [cyan]{new_model_id}[/cyan]."
                             )
