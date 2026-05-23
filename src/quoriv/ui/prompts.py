@@ -30,13 +30,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from io import StringIO
 from typing import TYPE_CHECKING, Any, Literal
 
-from rich.console import Console
 from rich.panel import Panel
 
 if TYPE_CHECKING:
+    from rich.console import Console
+
     from quoriv.ui.chat_app import ChatApp
 
 
@@ -128,8 +128,20 @@ async def prompt_approval(
             message="No interactive UI available for approval.",
         )
 
-    body_text = _render_approval_body_ansi(tool_name, tool_args, description)
-    choice = await chat_app.prompt_approval_modal(body_text=body_text)
+    # Slice 6: replace the Float Dialog modal with the same inline
+    # picker used by /login, /mode, /load. The Rich panel above
+    # (printed by ``_render_approval_panel``) shows the *what* —
+    # tool name, args, description — so the picker only needs to
+    # ask for the verdict.
+    choice = await chat_app.prompt_picker(
+        title=f"Approve {tool_name}?",
+        description="Pick how to handle this tool call.",
+        options=[
+            ("approve", "Approve once"),
+            ("approve_always", "Approve and remember for this session"),
+            ("reject", "Reject"),
+        ],
+    )
     if choice == "approve":
         return ApprovalDecision(type="approve")
     if choice == "approve_always":
@@ -202,46 +214,11 @@ def _render_approval_panel(
     )
 
 
-def _render_approval_body_ansi(
-    tool_name: str,
-    tool_args: dict[str, Any],
-    description: str | None,
-) -> str:
-    """Render the modal body as ANSI text via Rich.
-
-    The Dialog widget accepts ANSI-formatted text, so we let Rich do
-    the heavy lifting (panel border, syntax colours) and hand the
-    resulting bytes to prompt_toolkit. A fresh ``Console`` is used
-    rather than the chat console because the latter is wired to the
-    Application's scrollback — printing the modal body through it
-    would echo the panel into scrollback a second time.
-    """
-    buf = StringIO()
-    console = Console(
-        file=buf,
-        force_terminal=True,
-        color_system="truecolor",
-        width=80,
-        soft_wrap=False,
-    )
-    args_pretty = _format_args(tool_args)
-    body_lines = [
-        f"[bold cyan]{tool_name}[/bold cyan]",
-        "",
-        "[dim]args:[/dim]",
-        args_pretty,
-    ]
-    if description:
-        body_lines.extend(["", "[dim]description:[/dim]", description])
-    console.print(
-        Panel(
-            "\n".join(body_lines),
-            title="[yellow]approval required[/yellow]",
-            border_style="yellow",
-            expand=False,
-        )
-    )
-    return buf.getvalue()
+# v1.5.5: ``_render_approval_body_ansi`` was removed when the Float
+# Dialog approval modal was replaced with the inline picker. The
+# tool name / args / description now appear in the scrollback panel
+# above the picker (via ``_render_approval_panel``); the picker
+# itself only shows the three verdict options.
 
 
 def _format_args(args: dict[str, Any], *, indent: int = 2) -> str:

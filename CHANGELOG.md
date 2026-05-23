@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.5] — 2026-05-23
+
+### Changed
+
+- **HITL approval prompt now uses the same inline picker as `/login`, `/mode`, `/load`.** The Float-based `Dialog` modal is replaced by `chat_app.prompt_picker` with three numbered options:
+  1. Approve once
+  2. Approve and remember for this session
+  3. Reject
+
+  The Rich panel showing tool name + args + description still prints to scrollback above the picker (same context, same look), so the only thing that changed is the verdict UX — no more separate floating canvas, no more `a` / `r` / `A` letter shortcuts. Arrow keys + Enter (or digits `1`-`3`) match every other interactive selection in the app.
+
+### Removed
+
+- `_render_approval_body_ansi` helper in `prompts.py` (was only used by the Dialog modal — the picker doesn't need the ANSI-rendered body).
+- Unused `io.StringIO` import in `prompts.py` (left over from the removed helper).
+
+---
+
 ## [1.5.4] — 2026-05-23
 
 ### Fixed
