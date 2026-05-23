@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.2] — 2026-05-23
+
+### Changed
+
+- **Claude-Code-style inline picker for `/login` (provider + model).** Replaced the `CompletionsMenu`-popup approach with a real inline picker Window that renders a numbered list directly inside the chat area, above the input frame. Title + description sit at the top; selected row is prefixed with `>`; digit keys `1`-`9` jump-and-confirm; Up/Down/PageUp/PageDown navigate; Enter selects; Esc cancels. No floating box, no separate "small black canvas" — the picker consumes real layout space the same way the stream window does.
+
+### Added
+
+- **`ChatApp.prompt_picker(*, title, description, options)`** — new picker primitive. Uses a `ConditionalContainer` gated on `_picker_active[0]` so the picker Window only appears when active, with its own keybindings active only while it has focus.
+
+### Removed
+
+- `_make_picker_completer` helper in `app.py` (the per-wizard one-shot Completer that fed the now-replaced `prompt_input(open_completion=True)` path).
+
+---
+
 ## [1.5.1] — 2026-05-23
 
 ### Fixed

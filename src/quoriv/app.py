@@ -498,72 +498,41 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
 # ---------------------------------------------------------------------------
 
 
-def _make_picker_completer(options: list[tuple[str, str]]) -> Any:
-    """Build a one-shot ``Completer`` that emits a fixed ``(value, meta)`` list.
-
-    Used by the onboarding flow to drive the in-buffer dropdown for
-    provider selection and model selection. Scoped to the wizard —
-    the chat loop's regular :class:`SlashCommandCompleter` is restored
-    when the prompt returns.
-    """
-    from prompt_toolkit.completion import Completer, Completion  # noqa: PLC0415
-
-    class _Picker(Completer):
-        def get_completions(self, document: Any, _complete_event: Any) -> Any:
-            prefix = document.text_before_cursor.lower()
-            for value, meta in options:
-                if value.lower().startswith(prefix) or prefix in value.lower():
-                    yield Completion(
-                        value,
-                        start_position=-len(document.text_before_cursor),
-                        display=value,
-                        display_meta=meta,
-                    )
-
-    return _Picker()
+# v1.5.2: the per-wizard ``_make_picker_completer`` and
+# ``prompt_input(open_completion=True)`` path is replaced by
+# :meth:`ChatApp.prompt_picker` — a real inline picker Window that
+# renders a Claude-Code-style numbered list directly in the chat
+# area instead of a small autocomplete popup over an empty buffer.
 
 
 async def _pick_from_options(
     chat_app: ChatApp,
-    ui_console: Console,
+    _ui_console: Console,
     *,
-    header: str,
+    title: str,
+    description: str = "",
     options: list[tuple[str, str]],
 ) -> str | None:
-    """Prompt the user to pick one of ``options`` via inline dropdown.
+    """Show the Claude-Code-style inline picker and return the chosen value.
 
-    Prints ``header`` into scrollback above the input frame, then opens
-    the input prompt with a one-shot ``Completer`` over ``options``.
-    The completion menu pops open immediately so the user can
-    arrow-key through the list without typing.
+    Renders ``title`` + ``description`` above a numbered, arrow-keyed
+    list directly in the chat area (above the input frame). Up / Down
+    move the highlight, digits 1-9 jump-and-confirm, Enter selects,
+    Esc cancels. Returns the chosen value (the first element of the
+    matching tuple) or ``None`` if cancelled.
 
-    Returns the chosen value, or ``None`` if the user cancelled
-    (Ctrl+C / Ctrl+D / empty submit).
+    The ``ui_console`` parameter is kept for signature compatibility
+    with the previous implementation but is no longer used — the
+    picker draws into its own Window via the persistent layout,
+    not into scrollback.
     """
     if not options:
         return None
-    ui_console.print()
-    ui_console.print(header)
-    completer = _make_picker_completer(options)
-    try:
-        raw = await chat_app.prompt_input(
-            completer=completer,
-            open_completion=True,
-        )
-    except (EOFError, KeyboardInterrupt):
-        return None
-    chosen = raw.strip()
-    if not chosen:
-        return None
-    valid = {value for value, _ in options}
-    if chosen not in valid:
-        # Best-effort fuzzy: case-insensitive exact match against the
-        # value column. If still no match, treat as cancel.
-        for value, _ in options:
-            if value.lower() == chosen.lower():
-                return value
-        return None
-    return chosen
+    return await chat_app.prompt_picker(
+        title=title,
+        description=description,
+        options=options,
+    )
 
 
 async def _prompt_api_key(
@@ -614,10 +583,8 @@ async def _run_onboarding(
     provider_id = await _pick_from_options(
         chat_app,
         ui_console,
-        header=(
-            "[bold cyan]Choose a provider[/bold cyan]  "
-            "[dim](up/down navigate · Enter select · Esc cancel)[/dim]"
-        ),
+        title="Select provider",
+        description="Pick the model provider you want to use this session.",
         options=provider_choices(),
     )
     if provider_id is None:
@@ -646,8 +613,10 @@ async def _run_onboarding(
     model_id = await _pick_from_options(
         chat_app,
         ui_console,
-        header=f"[bold cyan]Choose a {provider.display_name} model[/bold cyan]  "
-        f"[dim](↑↓ navigate · Enter select · Esc cancel)[/dim]",
+        title=f"Select {provider.display_name} model",
+        description=(
+            f"Curated list for {provider.display_name}. First entry is the recommended default."
+        ),
         options=model_choices(provider_id),
     )
     if model_id is None:

@@ -262,8 +262,47 @@ class ChatApp:
             height=Dimension(min=0),
         )
 
+        # Slice 5: inline picker — renders an arrow-key-driven numbered
+        # list directly in the chat area (above the input frame). Unlike
+        # ``select_option_modal`` it isn't a Float — it's a normal Window
+        # in the HSplit, gated by ``_picker_active`` via a
+        # ``ConditionalContainer``, so it occupies real layout space and
+        # never overflows like a Float can. This is the Claude-Code-style
+        # ``/model`` chooser the user asked for.
+        from prompt_toolkit.layout.containers import (  # noqa: PLC0415
+            ConditionalContainer,
+        )
+
+        self._picker_active: list[bool] = [False]
+        self._picker_state: dict[str, Any] = {
+            "options": [],
+            "index": 0,
+            "title": "",
+            "description": "",
+            "future": None,
+        }
+        self._picker_control = FormattedTextControl(
+            text=self._get_picker_fragments,
+            focusable=True,
+            show_cursor=False,
+            key_bindings=self._build_picker_key_bindings(),
+        )
+        self._picker_window = Window(
+            self._picker_control,
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
+        self._picker_container = ConditionalContainer(
+            content=self._picker_window,
+            filter=Condition(lambda: self._picker_active[0]),
+        )
+
         # Bottom toolbar (optional, mirrors the Slice 1 status line).
-        children: list[Any] = [self._stream_window, self._input_frame]
+        children: list[Any] = [
+            self._stream_window,
+            self._picker_container,
+            self._input_frame,
+        ]
         if bottom_toolbar is not None:
             children.append(
                 Window(
@@ -530,6 +569,198 @@ class ChatApp:
         if not self._stream_buffer:
             return to_formatted_text("")
         return ANSI(_render_markdown_to_ansi(self._stream_buffer, width=self._stream_width))
+
+    # ----- Inline picker (Claude-Code-style numbered list) ----------------
+
+    def _get_picker_fragments(self) -> list[tuple[str, str]]:
+        """Render the inline picker as Claude-Code-style numbered list.
+
+        Layout:
+            <blank line>
+            ─ separator ─
+            Title (bold cyan)
+            Description (white, optional)
+            <blank line>
+              1. Label   ← highlighted with "> " prefix when current
+              2. Label
+              ...
+            <blank line>
+            (hint: ↑/↓ navigate · Enter select · Esc cancel)
+        """
+        state = self._picker_state
+        options: list[tuple[str, str]] = state.get("options", [])
+        index: int = state.get("index", 0)
+        title: str = state.get("title", "")
+        description: str = state.get("description", "")
+
+        fragments: list[tuple[str, str]] = [("", "\n")]
+        # Subtle separator above the picker section.
+        fragments.append(("class:picker.separator", "─" * 70 + "\n"))
+        if title:
+            fragments.append(("bold ansicyan", f"  {title}\n"))
+        if description:
+            fragments.append(("ansigray", f"  {description}\n"))
+        fragments.append(("", "\n"))
+
+        for i, opt in enumerate(options):
+            value, label = opt[0], opt[1]
+            number = f"{i + 1}."
+            if i == index:
+                fragments.append(("ansiyellow bold", f"  > {number} "))
+                fragments.append(("ansiwhite bold", f"{value}"))
+                if label and label != value:
+                    fragments.append(("ansigray", f"   {label}"))
+                fragments.append(("", "\n"))
+            else:
+                fragments.append(("ansigray", f"    {number} "))
+                fragments.append(("ansiwhite", f"{value}"))
+                if label and label != value:
+                    fragments.append(("ansigray", f"   {label}"))
+                fragments.append(("", "\n"))
+
+        fragments.append(("", "\n"))
+        fragments.append(
+            (
+                "ansigray italic",
+                "  up/down navigate   Enter select   Esc cancel\n",
+            )
+        )
+        fragments.append(("", "\n"))
+        return fragments
+
+    def _build_picker_key_bindings(self) -> KeyBindings:
+        """Key bindings active when the inline picker has focus.
+
+        These only fire when ``self._picker_window`` is the focused
+        control, so they don't conflict with the input buffer's
+        global bindings.
+        """
+        kb = KeyBindings()
+
+        def _resolve(value: str | None) -> None:
+            future = self._picker_state.get("future")
+            if future is not None and not future.done():
+                future.set_result(value)
+
+        @kb.add("up")
+        @kb.add("c-p")
+        def _up(event: Any) -> None:
+            if self._picker_state["index"] > 0:
+                self._picker_state["index"] -= 1
+                event.app.invalidate()
+
+        @kb.add("down")
+        @kb.add("c-n")
+        def _down(event: Any) -> None:
+            options = self._picker_state.get("options", [])
+            if self._picker_state["index"] < len(options) - 1:
+                self._picker_state["index"] += 1
+                event.app.invalidate()
+
+        @kb.add("home")
+        @kb.add("pageup")
+        def _top(event: Any) -> None:
+            self._picker_state["index"] = 0
+            event.app.invalidate()
+
+        @kb.add("end")
+        @kb.add("pagedown")
+        def _bottom(event: Any) -> None:
+            options = self._picker_state.get("options", [])
+            if options:
+                self._picker_state["index"] = len(options) - 1
+            event.app.invalidate()
+
+        @kb.add("enter")
+        def _select(event: Any) -> None:
+            options = self._picker_state.get("options", [])
+            if not options:
+                _resolve(None)
+                return
+            value = options[self._picker_state["index"]][0]
+            _resolve(value)
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        def _cancel(event: Any) -> None:
+            _resolve(None)
+
+        # Number shortcuts (1-9) jump-and-confirm.
+        for i in range(1, 10):
+
+            @kb.add(str(i))
+            def _by_number(event: Any, n: int = i) -> None:
+                options = self._picker_state.get("options", [])
+                if 1 <= n <= len(options):
+                    self._picker_state["index"] = n - 1
+                    _resolve(options[n - 1][0])
+
+        return kb
+
+    async def prompt_picker(
+        self,
+        *,
+        title: str,
+        description: str = "",
+        options: list[tuple[str, str]],
+    ) -> str | None:
+        """Show an inline picker section and return the chosen value.
+
+        Renders as a Claude-Code-style numbered list directly inside
+        the chat area (above the input frame, below the stream
+        window). Unlike :meth:`select_option_modal` / the v1.3.x
+        Float-based picker, this consumes real layout space — there
+        is no floating box, no risk of "Window too small" overflow,
+        and no separate visual canvas. Up/down move the highlight;
+        digit keys ``1`` through ``9`` jump-and-confirm; ``Enter``
+        selects the highlighted row; ``Esc`` / ``Ctrl+C`` cancel.
+
+        Args:
+            title: Header text shown above the list (e.g. "Select
+                model").
+            description: Optional one-line subtitle under the
+                header. Pass empty string to suppress.
+            options: Ordered ``(value, label)`` pairs. ``value`` is
+                what gets returned; ``label`` is the human-readable
+                description shown next to it.
+
+        Returns:
+            The chosen value, or ``None`` if the user cancelled.
+            Returns ``None`` immediately when ``options`` is empty.
+        """
+        if not options:
+            return None
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str | None] = loop.create_future()
+
+        self._picker_state.update(
+            {
+                "options": list(options),
+                "index": 0,
+                "title": title,
+                "description": description,
+                "future": future,
+            }
+        )
+        self._picker_active[0] = True
+
+        prev_focus = self.app.layout.current_window
+        with contextlib.suppress(Exception):  # pragma: no cover — headless fallback
+            self.app.layout.focus(self._picker_window)
+        if not self.app.is_done:
+            self.app.invalidate()
+
+        try:
+            return await future
+        finally:
+            self._picker_active[0] = False
+            self._picker_state["future"] = None
+            if prev_focus is not None:
+                with contextlib.suppress(Exception):
+                    self.app.layout.focus(prev_focus)
+            if not self.app.is_done:
+                self.app.invalidate()
 
     # ----- Console scrollback ---------------------------------------------
 
