@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.8] — 2026-05-23
+
+### Added — Thinking / reasoning surfacing
+
+- **Streamed reasoning shows above the answer in an italic-grey ``▸ Thinking…`` block.** Works for every provider, with three different protocols handled by ``_chunk_blocks``:
+  1. **Structured content blocks** — Anthropic Claude (extended thinking ``type="thinking"``) and OpenAI Responses API / o-series / gpt-5.x (``type="reasoning"``). Reasoning blocks go straight to ``chat_app.push_thinking``; text blocks go to the regular stream.
+  2. **``additional_kwargs.reasoning_content``** — DeepSeek (V4, R1) and Kimi (K2.6 thinking) via the langchain-openai wrapper. We read both the ``reasoning_content`` and ``reasoning`` keys to handle minor build differences.
+  3. **Inline ``<think>...</think>`` tags** — DeepSeek-R1 in non-Responses-API mode emits reasoning as plain text wrapped in tags. A small state-machine parser (``_strip_think_tags``) handles tags that span chunk boundaries, including the case where ``<thi`` arrives in one chunk and ``nk>`` in the next.
+- **Collapsed scrollback flush.** When ``finalize_stream`` commits the answer to scrollback, the full chain-of-thought is *not* echoed — only a one-liner ``▸ Thought for N chars`` (italic grey) lands above the rendered markdown answer. The thinking stays visible *during* streaming for live feedback; once the turn is done it stops dominating scrollback. Matches Claude Code's collapsed reasoning view.
+- **``ChatApp.push_thinking(text)``** — new method parallel to ``push_chunk``. ``ChatApp.thinking_buffer`` exposes the in-flight buffer for tests.
+
+### Tests
+
+- `tests/unit/test_thinking_blocks.py` (11) — structured ``type="thinking"`` (Anthropic), ``type="reasoning"`` (OpenAI Responses), ``additional_kwargs.reasoning_content`` (DeepSeek / Kimi), and the inline ``<think>`` parser including partial-tag-at-chunk-boundary cases.
+
+**Test count: 920 → 931** (+11). All gates green.
+
+---
+
 ## [1.5.7] — 2026-05-23
 
 ### Changed — Claude-Code-style tool feedback

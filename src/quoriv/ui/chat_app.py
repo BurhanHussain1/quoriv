@@ -178,6 +178,22 @@ def _render_markdown_to_ansi(text: str, *, width: int = 100) -> str:
     return buf.getvalue()
 
 
+def _format_thinking_summary(thinking: str) -> str:
+    """Collapse a reasoning trace to a single dim italic line.
+
+    Returns the ANSI sequence ready to print above the answer in
+    scrollback. Empty input returns ``""`` so callers can short-
+    circuit. We don't echo the full chain-of-thought — most of it is
+    private/model-specific scratchwork; the user's expectation is
+    "I can see it streaming, but it shouldn't dominate scrollback".
+    """
+    if not thinking.strip():
+        return ""
+    n = len(thinking)
+    # ANSI: italic + grey + "thought for N chars" + newline + reset.
+    return f"\x1b[3;2;90m▸ Thought for {n:,} chars\x1b[0m\n"
+
+
 # ---------------------------------------------------------------------------
 # ChatApp — the persistent Application wrapper
 # ---------------------------------------------------------------------------
@@ -205,8 +221,12 @@ class ChatApp:
         # Stream state. ``_stream_buffer`` is the in-flight markdown
         # being accumulated by ``push_chunk``; ``_get_stream_fragments``
         # re-renders it on every redraw so the visible markdown stays
-        # current.
+        # current. ``_thinking_buffer`` (Slice 7) holds extended-
+        # thinking / reasoning tokens — rendered in a dim italic block
+        # above the answer so the user can see the model "think" but
+        # the visual hierarchy keeps the answer primary.
         self._stream_buffer = ""
+        self._thinking_buffer = ""
         self._stream_width = stream_width
 
         # Pending interaction futures. At most one of these is non-None
@@ -393,8 +413,13 @@ class ChatApp:
 
     @property
     def is_streaming(self) -> bool:
-        """True if any text has been pushed since the last finalize."""
-        return bool(self._stream_buffer)
+        """True if any text or thinking has been pushed since finalize."""
+        return bool(self._stream_buffer or self._thinking_buffer)
+
+    @property
+    def thinking_buffer(self) -> str:
+        """Current in-flight reasoning / thinking text (testing hook)."""
+        return self._thinking_buffer
 
     # ----- Lifecycle ------------------------------------------------------
 
@@ -534,6 +559,22 @@ class ChatApp:
         if not self.app.is_done:
             self.app.invalidate()
 
+    def push_thinking(self, text: str) -> None:
+        """Append reasoning / thinking tokens to the in-flight buffer.
+
+        Rendered in a dim italic block above the answer in the stream
+        window. The text accumulates separately from the answer so
+        :meth:`finalize_stream` can collapse it on flush (we keep
+        "thought for N chars" in scrollback, not the full chain-of-
+        thought — saves vertical space and matches Claude Code).
+        Empty input is a no-op.
+        """
+        if not text:
+            return
+        self._thinking_buffer += text
+        if not self.app.is_done:
+            self.app.invalidate()
+
     async def finalize_stream(self) -> str:
         """Flush the current stream to scrollback and clear the window.
 
@@ -544,31 +585,55 @@ class ChatApp:
         single ``run_in_terminal`` callback so the screen never shows
         an intermediate "empty stream + nothing in scrollback" state.
 
+        When a thinking buffer is present it's collapsed to a single
+        ``▸ Thought for N chars`` line that flushes alongside the
+        answer — the full chain-of-thought is not echoed to
+        scrollback (it stays visible only during streaming).
+
         Safe to call when no stream is active — returns ``""``.
         """
-        if not self._stream_buffer:
+        if not self._stream_buffer and not self._thinking_buffer:
             return ""
         text = self._stream_buffer
+        thinking = self._thinking_buffer
         rendered = _render_markdown_to_ansi(text, width=self._stream_width)
+        thinking_summary = _format_thinking_summary(thinking)
 
         def _flush() -> None:
             self._stream_buffer = ""
-            # ``print_text`` requires ``run_in_terminal`` while the
-            # app is running, which is exactly the context we're in.
-            self.app.print_text(ANSI(rendered))
+            self._thinking_buffer = ""
+            if thinking_summary:
+                # Print the collapsed "thought for N chars" line first
+                # so it sits above the answer in scrollback.
+                self.app.print_text(ANSI(thinking_summary))
+            if rendered:
+                self.app.print_text(ANSI(rendered))
 
         if self.app.is_done:
             # Tests / shutdown path — just write directly.
             self._stream_buffer = ""
+            self._thinking_buffer = ""
         else:
             await run_in_terminal(_flush)
         return text
 
     def _get_stream_fragments(self) -> Any:
         """Build the FormattedText fragments shown in the stream window."""
-        if not self._stream_buffer:
+        if not self._stream_buffer and not self._thinking_buffer:
             return to_formatted_text("")
-        return ANSI(_render_markdown_to_ansi(self._stream_buffer, width=self._stream_width))
+        out: list[tuple[str, str]] = []
+        if self._thinking_buffer:
+            # Header
+            out.append(("italic ansicyan", "▸ Thinking…\n"))
+            # Body — dim italic so the answer below remains primary.
+            for line in self._thinking_buffer.splitlines() or [self._thinking_buffer]:
+                out.append(("italic ansigray", f"  {line}\n"))
+            if self._stream_buffer:
+                out.append(("", "\n"))
+        if self._stream_buffer:
+            rendered = _render_markdown_to_ansi(self._stream_buffer, width=self._stream_width)
+            return out + list(ANSI(rendered).__pt_formatted_text__())
+        return out
 
     # ----- Inline picker (Claude-Code-style numbered list) ----------------
 
@@ -818,9 +883,11 @@ class ChatApp:
 
         Used by ``/clear``. The terminal's own scrollback isn't
         cleared (that's the terminal emulator's job); we just reset
-        the in-flight stream so the next render starts fresh.
+        the in-flight stream + thinking buffers so the next render
+        starts fresh.
         """
         self._stream_buffer = ""
+        self._thinking_buffer = ""
         if not self.app.is_done:
             self.app.invalidate()
 

@@ -1197,6 +1197,10 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
     callback exceptions, so a broken hook can never break a turn.
     """
     renderer = StreamRenderer(chat_app)
+    # Slice 7: state carried across chunks for the inline-``<think>``
+    # tag parser (DeepSeek-R1 etc. that stream reasoning as plain
+    # text wrapped in ``<think>...</think>``).
+    think_state: dict[str, Any] = {"in_thinking": False, "carry": ""}
     # Resolve the markdown-fallback console once. When ``chat_app`` is
     # wired, ``_finalize_stream`` flushes the rendered markdown into
     # scrollback. Otherwise we keep the legacy behaviour of writing
@@ -1211,7 +1215,18 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
-                text = _chunk_text(getattr(chunk, "content", ""))
+                # Slice 7: extract both visible text *and* reasoning
+                # / thinking text from the chunk. Providers expose it
+                # in three places — content blocks with type
+                # "thinking" / "reasoning" (Anthropic, OpenAI
+                # Responses API), additional_kwargs.reasoning_content
+                # (DeepSeek / Kimi via LangChain wrappers), or inline
+                # ``<think>...</think>`` tags in plain content
+                # (DeepSeek-R1 fallback). ``_chunk_blocks`` returns
+                # ``(text, thinking)``.
+                text, thinking = _chunk_blocks(chunk, think_state)
+                if thinking and chat_app is not None:
+                    chat_app.push_thinking(thinking)
                 renderer.push(text)
                 if chat_app is None and text:
                     # Headless / legacy path: no persistent UI to
@@ -1408,17 +1423,124 @@ def _chunk_text(content: Any) -> str:  # LangChain content is dynamic
     Most chunks carry a string. Multimodal / tool-use chunks may instead
     carry a list of content blocks — we surface text blocks and ignore the
     rest at this layer.
+
+    Kept for backwards compatibility with the integration test that
+    drives ``_drive_turn`` with ``chat_app=None``. Production callers
+    use :func:`_chunk_blocks` instead so they get the reasoning text
+    too.
     """
+    text, _thinking = _chunk_blocks_from_content(content, additional_kwargs={})
+    return text
+
+
+def _chunk_blocks(chunk: Any, state: dict[str, Any]) -> tuple[str, str]:
+    """Return ``(visible_text, thinking_text)`` for a streamed chunk.
+
+    Slice 7 — handles three different ways providers expose reasoning:
+
+    * **Structured content blocks** (Anthropic extended thinking,
+      OpenAI Responses API) — list entries with ``type="thinking"``
+      or ``type="reasoning"`` go to the thinking buffer; ``type="text"``
+      goes to the visible buffer.
+    * **``additional_kwargs.reasoning_content``** — DeepSeek / Kimi
+      via the langchain-openai wrapper expose reasoning here.
+    * **Inline ``<think>...</think>`` tags** — DeepSeek-R1 in
+      non-reasoning-API mode wraps reasoning in tags inside the plain
+      ``content`` string. ``state`` (per-stream dict with
+      ``in_thinking`` / ``carry`` keys) lets the parser handle tag
+      boundaries that span multiple chunks.
+    """
+    content = getattr(chunk, "content", "")
+    additional = getattr(chunk, "additional_kwargs", None) or {}
+    text, thinking = _chunk_blocks_from_content(content, additional_kwargs=additional)
+    # Then strip any inline ``<think>...</think>`` from the visible text.
+    if text and ("<think" in text or state.get("in_thinking") or state.get("carry")):
+        text, more_thinking = _strip_think_tags(text, state)
+        thinking += more_thinking
+    return text, thinking
+
+
+def _chunk_blocks_from_content(
+    content: Any,
+    *,
+    additional_kwargs: dict[str, Any],
+) -> tuple[str, str]:
+    """Pure helper: split a chunk's ``content`` + ``additional_kwargs``."""
+    text = ""
+    thinking = ""
+
     if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, str):
-            parts.append(block)
-        elif isinstance(block, dict) and block.get("type") == "text":
-            text = block.get("text", "")
-            if isinstance(text, str):
-                parts.append(text)
-    return "".join(parts)
+        text = content
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, str):
+                text += block
+            elif isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype == "text":
+                    payload = block.get("text", "")
+                    if isinstance(payload, str):
+                        text += payload
+                elif btype in {"thinking", "reasoning", "reasoning_text"}:
+                    payload = (
+                        block.get("thinking") or block.get("text") or block.get("reasoning") or ""
+                    )
+                    if isinstance(payload, str):
+                        thinking += payload
+
+    # DeepSeek / Kimi via langchain-openai expose reasoning in
+    # additional_kwargs.reasoning_content (or .reasoning on some
+    # builds). Catch both spellings.
+    for key in ("reasoning_content", "reasoning"):
+        extra = additional_kwargs.get(key)
+        if isinstance(extra, str):
+            thinking += extra
+
+    return text, thinking
+
+
+def _strip_think_tags(text: str, state: dict[str, Any]) -> tuple[str, str]:
+    """Strip inline ``<think>...</think>`` tags from streamed text.
+
+    Stateful parser: ``state["in_thinking"]`` tracks whether we're
+    mid-tag across chunks; ``state["carry"]`` holds a partial tag at
+    a chunk boundary (so ``<thi`` arriving in one chunk and ``nk>``
+    in the next still gets recognised).
+
+    Returns ``(visible_text, thinking_text)``.
+    """
+    buf = state.get("carry", "") + text
+    state["carry"] = ""
+    visible = ""
+    thinking = ""
+
+    while buf:
+        if state.get("in_thinking"):
+            end = buf.find("</think>")
+            if end < 0:
+                thinking += buf
+                buf = ""
+            else:
+                thinking += buf[:end]
+                buf = buf[end + len("</think>") :]
+                state["in_thinking"] = False
+            continue
+
+        start = buf.find("<think>")
+        if start < 0:
+            # No more opening tags. Hold back a few chars in case a
+            # partial ``<think`` is sitting at the end.
+            tail_window = min(len(buf), len("<think>") - 1)
+            if "<" in buf[-tail_window:]:
+                cut = buf.rfind("<")
+                visible += buf[:cut]
+                state["carry"] = buf[cut:]
+            else:
+                visible += buf
+            buf = ""
+            break
+        visible += buf[:start]
+        buf = buf[start + len("<think>") :]
+        state["in_thinking"] = True
+
+    return visible, thinking
