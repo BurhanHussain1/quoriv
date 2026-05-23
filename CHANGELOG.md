@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.3] — 2026-05-23
+
+### Changed
+
+- **`/mode` and `/load` now open the Claude-Code-style inline picker** on bare submit, matching the `/login` flow. Typing `/mode<Enter>` shows the four permission modes inline (above the input frame, numbered, arrow-key navigable); typing `/load<Enter>` shows saved sessions newest-first with their timestamps and short thread IDs. Picking with Up/Down + Enter (or digits `1`-`9`) rewrites the command to `/mode <choice>` / `/load <choice>` and dispatches through the existing handler — same live agent rebuild + status-line update logic. `Esc` cancels and prints `Mode unchanged.` / `Load cancelled.`.
+
+### Removed
+
+- **`CompletionsMenu` argument popup for `/mode` and `/load`.** The small autocomplete popover the v1.4.0 `SlashCommandCompleter.argument_providers` mapping fed was the "small black canvas" the user disliked; with the inline picker handling discoverable selection it's no longer needed. The `SlashCommandCompleter` still surfaces command-name completions for fast typing, just not argument values.
+
+---
+
 ## [1.5.2] — 2026-05-23
 
 ### Changed

@@ -281,25 +281,13 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
 
     from quoriv.ui.slash_completer import SlashCommandCompleter  # noqa: PLC0415  (lazy import)
 
-    # Slice 3: argument completions for the slash commands that take
-    # one of a known set of values. The provider lambdas are evaluated
-    # at completion time so dynamic data (saved sessions) stays fresh
-    # without rebuilding the completer.
-    def _mode_options() -> list[tuple[str, str]]:
-        return [(mode, _MODE_DESCRIPTIONS[mode]) for mode in ALLOWED_MODES]
-
-    def _load_options() -> list[tuple[str, str]]:
-        sessions = registry.list_named()
-        sorted_sessions = sorted(sessions, key=lambda s: s.saved_at, reverse=True)
-        return [(s.name, f"{s.saved_at}  thread {s.thread_id[:8]}") for s in sorted_sessions]
-
-    completer = SlashCommandCompleter(
-        SLASH_COMMANDS,
-        argument_providers={
-            "/mode": _mode_options,
-            "/load": _load_options,
-        },
-    )
+    # Slice 5: argument completions for ``/mode`` / ``/load`` are
+    # removed from the SlashCommandCompleter — the ``CompletionsMenu``
+    # popup (the "small black canvas" the user disliked) is replaced
+    # everywhere by the inline ``prompt_picker`` triggered when the
+    # user submits a bare ``/mode`` or ``/load``. The completer still
+    # surfaces the command names themselves for fast typing.
+    completer = SlashCommandCompleter(SLASH_COMMANDS)
     # Shared across turns so up-arrow recall works the way users expect.
     history = InMemoryHistory()
 
@@ -378,11 +366,60 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
             # Bare ``/mode<Enter>`` falls through to ``_handle_mode``
             # below which prints the mode list to scrollback.
 
-            # Slice 4: async slash commands intercepted ahead of the
+            # Slice 4 + 5: async slash commands intercepted ahead of the
             # sync dispatcher. ``/login`` / ``/setup`` / ``/logout``
-            # need to run the onboarding wizard which awaits the
-            # chat_app — can't go through the sync ``_handle_slash``.
-            lower_cmd = user_input.split(maxsplit=1)[0].lower()
+            # run the onboarding wizard which awaits the chat_app;
+            # bare ``/mode`` / ``/load`` open the inline picker. None
+            # of these can go through the sync ``_handle_slash``.
+            split_cmd = user_input.split(maxsplit=1)
+            lower_cmd = split_cmd[0].lower()
+            cmd_arg = split_cmd[1].strip() if len(split_cmd) > 1 else ""
+
+            # Bare ``/mode`` → inline mode picker.
+            if lower_cmd == "/mode" and not cmd_arg:
+                mode_options: list[tuple[str, str]] = [
+                    (m, _MODE_DESCRIPTIONS[m]) for m in ALLOWED_MODES
+                ]
+                choice = await chat_app.prompt_picker(
+                    title="Select permission mode",
+                    description=(
+                        "Controls which tools require approval. "
+                        f"Currently: {state['permission_mode']}"
+                    ),
+                    options=mode_options,
+                )
+                if choice is None:
+                    ui_console.print("[dim]Mode unchanged.[/dim]")
+                    continue
+                # Reuse the existing /mode <name> dispatch path so
+                # the live agent rebuild + status-line update logic
+                # runs unchanged.
+                user_input = f"/mode {choice}"
+                # Fall through to _handle_slash below.
+
+            # Bare ``/load`` → inline saved-session picker.
+            elif lower_cmd == "/load" and not cmd_arg:
+                sessions = registry.list_named()
+                if not sessions:
+                    # No sessions saved yet — let _handle_load print
+                    # its "no saved sessions" hint to scrollback.
+                    pass
+                else:
+                    sorted_sessions = sorted(sessions, key=lambda s: s.saved_at, reverse=True)
+                    load_options: list[tuple[str, str]] = [
+                        (s.name, f"{s.saved_at}  thread {s.thread_id[:8]}") for s in sorted_sessions
+                    ]
+                    choice = await chat_app.prompt_picker(
+                        title="Load saved session",
+                        description="Switch to a previously saved thread.",
+                        options=load_options,
+                    )
+                    if choice is None:
+                        ui_console.print("[dim]Load cancelled.[/dim]")
+                        continue
+                    user_input = f"/load {choice}"
+                    # Fall through.
+
             if lower_cmd in {"/login", "/setup"}:
                 result = await _run_onboarding(chat_app, ui_console)
                 if result is not None:
