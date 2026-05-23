@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.6] — 2026-05-23
+
+### CI
+
+- Pass ``token: ${{ secrets.GITHUB_TOKEN }}`` explicitly to ``softprops/action-gh-release@v2``. The v1.5.5 PyPI publish succeeded but the follow-up GitHub Release attachment failed with "Bad credentials" — the action's default ``GITHUB_TOKEN`` env lookup didn't pick up the token even though ``permissions: contents: write`` was set on the job. No code changes vs v1.5.5.
+
+---
+
 ## [1.5.5] — 2026-05-23
 
 ### Changed
