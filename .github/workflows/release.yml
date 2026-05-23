@@ -124,6 +124,10 @@ jobs:
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit token works around "Bad credentials" errors we
+          # hit on v1.5.5 when the action's default GITHUB_TOKEN env
+          # lookup failed despite ``permissions: contents: write``.
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
