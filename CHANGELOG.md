@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.6.0] — 2026-05-24
+
+### Added — Rotating status verb for non-reasoning models
+
+- **"Pondering…" / "Concocting…" / "Incubating…" status row** while the model is generating but hasn't started streaming yet. Renders as a single italic-grey line (`▸ Verb…`) above the input frame, cycling through ~30 whimsical verbs every 3 seconds — *Brewing, Cogitating, Concocting, Conjuring, Crystallizing, Distilling, Excogitating, Forging, Gestating, Hatching, Incubating, Marinating, Musing, Percolating, Pondering, Ruminating, Synthesizing, Tinkering, Unspooling, Weaving, Wrangling*, etc.
+- **Lifecycle:** starts at the top of `_drive_turn` before the first event arrives; stops as soon as real content (text *or* thinking) shows up via `push_chunk` / `push_thinking`; stops on `on_tool_start` so the tool's own one-line label takes over; restarts on `on_tool_end` so the user sees activity while the model resumes; final stop on turn end.
+- Doesn't interfere with reasoning models — the `▸ Thinking…` block from v1.5.8 supersedes the rotating verb the moment any actual reasoning tokens arrive. Reasoning shows for `claude-opus-4-7`, `o3` / `gpt-5.5-pro`, `gemini-3.1-pro`, `deepseek-r1` / `deepseek-v4-pro`, `kimi-k2.6`; the verb keeps everyone else (gpt-5.4, gpt-5.4-mini, claude-haiku-4-5, gemini-2.5-flash, etc.) feeling alive.
+
+### Internal
+
+- `ChatApp.set_status` / `start_status` / `stop_status` — manage the rotation. `start_status` spawns an asyncio task that cycles the verb; `stop_status` cancels and clears. Both are no-ops when there's no running event loop (test-safe).
+- New `_status_container` Window in the layout, gated by `ConditionalContainer` on `_status_text is not None`.
+- `push_chunk` and `push_thinking` call `stop_status()` themselves, so any caller that pushes content automatically suppresses the verb.
+
+---
+
 ## [1.5.11] — 2026-05-24
 
 ### Fixed

@@ -1140,6 +1140,12 @@ async def _drive_turn(
     try:
         while True:
             console.print()
+            # Slice 8: kick the rotating "Pondering…" status verb
+            # before the first event arrives. ``push_chunk`` /
+            # ``push_thinking`` / tool_start each stop it once
+            # real content shows up.
+            if chat_app is not None:
+                chat_app.start_status()
             await _stream_events(
                 console,
                 agent,
@@ -1166,6 +1172,8 @@ async def _drive_turn(
     finally:
         if tracer is not None:
             tracer.log("turn_end", thread_id=thread_id)
+        if chat_app is not None:
+            chat_app.stop_status()
 
 
 async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch with optional tracer + hooks fires
@@ -1236,6 +1244,7 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
 
             if kind == "on_chat_model_end":
                 if chat_app is not None:
+                    chat_app.stop_status()
                     await renderer.finalize_async()
                 else:
                     renderer.finalize()
@@ -1247,6 +1256,9 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
 
             if kind == "on_tool_start":
                 if chat_app is not None:
+                    # The tool label takes over from the rotating
+                    # "Pondering…" status verb.
+                    chat_app.stop_status()
                     await renderer.finalize_async()
                 else:
                     renderer.finalize()
@@ -1279,6 +1291,11 @@ async def _stream_events(  # noqa: PLR0912, PLR0915 — flat event-kind dispatch
                 if hooks is not None:
                     hooks.fire("post_tool", tool_name=tool_name, output=output)
                 render_tool_end(console, output, name=tool_name)
+                if chat_app is not None:
+                    # Tool finished — the model is about to resume.
+                    # Kick the rotating verb again so the user knows
+                    # we're still working, not stuck.
+                    chat_app.start_status()
                 continue
     finally:
         if chat_app is not None:

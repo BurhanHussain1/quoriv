@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import random
 import sys
 from io import StringIO
 from typing import TYPE_CHECKING, Any
@@ -199,6 +200,49 @@ def _format_thinking_summary(thinking: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_STATUS_VERBS: tuple[str, ...] = (
+    "Brewing",
+    "Cogitating",
+    "Concocting",
+    "Conjuring",
+    "Contemplating",
+    "Crafting",
+    "Crystallizing",
+    "Deliberating",
+    "Devising",
+    "Distilling",
+    "Excogitating",
+    "Forging",
+    "Gestating",
+    "Hatching",
+    "Incubating",
+    "Marinating",
+    "Meditating",
+    "Mulling",
+    "Musing",
+    "Noodling",
+    "Percolating",
+    "Pondering",
+    "Reflecting",
+    "Ruminating",
+    "Scheming",
+    "Simmering",
+    "Sketching",
+    "Synthesizing",
+    "Tinkering",
+    "Unspooling",
+    "Weaving",
+    "Wrangling",
+)
+"""Whimsical-but-readable verbs cycled through ``_status_text`` while a
+non-reasoning model is generating but hasn't begun streaming yet.
+
+The vocabulary is intentionally varied (and a little fancy — *Excogitating*,
+*Crystallizing*, *Unspooling*) so the status indicator feels lively without
+being annoying. Inspired by Claude Code's rotating "thinking" indicators.
+"""
+
+
 class ChatApp:
     """Persistent chat Application owning the prompt_toolkit layout.
 
@@ -228,6 +272,14 @@ class ChatApp:
         self._stream_buffer = ""
         self._thinking_buffer = ""
         self._stream_width = stream_width
+
+        # Slice 8: rotating status verb for non-reasoning models that
+        # don't emit a thinking stream. ``_status_text`` is the
+        # currently-displayed verb; ``_status_task`` is the background
+        # asyncio task that cycles it every ~3s. Both are ``None``
+        # when no status is active.
+        self._status_text: str | None = None
+        self._status_task: asyncio.Task[None] | None = None
 
         # Pending interaction futures. At most one of these is non-None
         # at any moment; both default to None so a stray Enter while
@@ -317,9 +369,31 @@ class ChatApp:
             filter=Condition(lambda: self._picker_active[0]),
         )
 
+        # Slice 8: rotating "Pondering…" / "Concocting…" status row.
+        # Renders as a single italic-grey line above the input frame,
+        # only visible when ``_status_text`` is set. Used to keep the
+        # user engaged while a non-reasoning model is generating but
+        # hasn't started streaming text yet (or in the gap between a
+        # tool returning and the model resuming).
+        self._status_control = FormattedTextControl(
+            text=self._get_status_fragments,
+            focusable=False,
+            show_cursor=False,
+        )
+        self._status_window = Window(
+            self._status_control,
+            height=1,
+            dont_extend_height=True,
+        )
+        self._status_container = ConditionalContainer(
+            content=self._status_window,
+            filter=Condition(lambda: self._status_text is not None),
+        )
+
         # Bottom toolbar (optional, mirrors the Slice 1 status line).
         children: list[Any] = [
             self._stream_window,
+            self._status_container,
             self._picker_container,
             self._input_frame,
         ]
@@ -555,6 +629,9 @@ class ChatApp:
         """
         if not text:
             return
+        # Real content is arriving — kill the rotating status verb
+        # so it doesn't sit next to the actual answer.
+        self.stop_status()
         self._stream_buffer += text
         if not self.app.is_done:
             self.app.invalidate()
@@ -571,9 +648,77 @@ class ChatApp:
         """
         if not text:
             return
+        # Any real reasoning supersedes the rotating status verb —
+        # the user can see the model is actually generating now.
+        self.stop_status()
         self._thinking_buffer += text
         if not self.app.is_done:
             self.app.invalidate()
+
+    # ----- Status verb rotation -------------------------------------------
+
+    def set_status(self, text: str | None) -> None:
+        """Set the inline status line (e.g. ``Pondering…``).
+
+        Pass ``None`` to hide. The status row is only visible while
+        ``_status_text`` is non-None — the ``ConditionalContainer``
+        in the layout takes care of collapsing the row otherwise.
+        """
+        self._status_text = text
+        if not self.app.is_done:
+            self.app.invalidate()
+
+    def start_status(self, *, interval: float = 3.0) -> None:
+        """Begin cycling a random verb every ``interval`` seconds.
+
+        Used between "user submitted" and "first chunk arrived" so a
+        non-reasoning model doesn't appear frozen. Calling this while
+        a rotation is already running is a no-op.
+
+        Skipped silently when there's no running event loop or no
+        Application yet (test contexts).
+        """
+        if self._status_task is not None and not self._status_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _rotate() -> None:
+            verbs = list(_STATUS_VERBS)
+            random.shuffle(verbs)
+            idx = 0
+            try:
+                while True:
+                    self.set_status(f"{verbs[idx]}…")
+                    idx = (idx + 1) % len(verbs)
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                # Normal stop path — propagate so the task ends.
+                raise
+
+        self._status_task = loop.create_task(_rotate())
+
+    def stop_status(self) -> None:
+        """Cancel the rotation and clear the status line.
+
+        Safe to call repeatedly. Used when the first chunk arrives,
+        when a tool call starts (the tool label takes over), and at
+        turn teardown.
+        """
+        if self._status_task is not None:
+            if not self._status_task.done():
+                self._status_task.cancel()
+            self._status_task = None
+        if self._status_text is not None:
+            self.set_status(None)
+
+    def _get_status_fragments(self) -> list[tuple[str, str]]:
+        """Render the status row — one italic-grey line, or empty."""
+        if not self._status_text:
+            return []
+        return [("italic ansigray", f"  ▸ {self._status_text}\n")]
 
     async def finalize_stream(self) -> str:
         """Flush the current stream to scrollback and clear the window.
