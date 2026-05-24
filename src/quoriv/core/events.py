@@ -98,6 +98,13 @@ def render_tool_end(
         # message. Don't double-print.
         return
 
+    if name in {"write_file", "edit_file"}:
+        # The diff renderer (``quoriv.ui.diff.render_edit_diff``)
+        # already showed the change at ``tool_start``; the tool's
+        # return value is just an "Updated /path/file" echo we'd
+        # rather not double-print.
+        return
+
     if name == "execute":
         _render_execute_output(console, output, max_len=max_len)
         return

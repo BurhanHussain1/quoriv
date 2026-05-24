@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.5.11] — 2026-05-24
+
+### Fixed
+
+- **Silent ``tool_end`` for ``write_file`` / ``edit_file``.** The v1.5.7 generic-tool branch was still printing ``content='Updated file /foo.py' name='write_file' tool_call_id='…'`` for write/edit calls after the diff renderer had already shown what changed. Added both to the silent-on-end allowlist alongside ``read_file`` / ``ls`` / ``glob`` / ``grep``.
+
+---
+
 ## [1.5.10] — 2026-05-23
 
 ### CI
