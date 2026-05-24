@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.6.1] — 2026-05-24
+
+### Fixed
+
+- **Slow paste into the input box.** ``complete_while_typing=True`` fired the slash completer on every character of a pasted blob — a 1000-char paste meant 1000 completer calls + 1000 popup repaints. Now gated by a ``Condition`` that only enables completion when the buffer is short (< 80 chars) *and* starts with ``/``, so pastes are instant and the slash-command typeahead still works for the case it was designed for.
+- **Input box stuck at one line.** The input ``Window`` was hardcoded to ``height=1, wrap_lines=False`` so long text scrolled horizontally off the right edge and pasted newlines got flattened. Changed to ``height=Dimension(min=1), wrap_lines=True, dont_extend_height=True`` and flipped the buffer to ``multiline=True``. The frame now grows downward as you paste or type more lines, and pasted text retains its line breaks. Enter still submits (our keybinding wins over the default newline-on-Enter behaviour); ``Esc-Enter`` still inserts a literal newline.
+
+---
+
 ## [1.6.0] — 2026-05-24
 
 ### Added — Rotating status verb for non-reasoning models

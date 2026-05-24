@@ -288,21 +288,34 @@ class ChatApp:
         self._approval_future: asyncio.Future[ApprovalDecision] | None = None
         self._exit_requested = False
 
-        # Input buffer + frame (same look as Phase 5 Slice 1).
-        self._input_buffer = Buffer(
-            completer=completer,
-            history=history if history is not None else InMemoryHistory(),
-            multiline=False,
-            complete_while_typing=True,
-        )
-        # Slice 4: password masking is toggled by a mutable flag the
-        # ConditionalProcessor reads on every render. Flipping
-        # ``self._password_mode[0]`` swaps the input from "show
-        # characters" to "show stars" without rebuilding the control.
+        # Input buffer + frame.
+        # Slice 9 (v1.6.1):
+        #   * ``multiline=True`` so pasting text that contains
+        #     newlines actually breaks into multiple lines instead of
+        #     getting flattened. Our Enter keybinding still wins over
+        #     prompt_toolkit's default "newline on Enter" behaviour,
+        #     so Enter submits and Esc-Enter inserts a line break.
+        #   * ``complete_while_typing`` is gated by a ``Condition``:
+        #     the completer only fires when the buffer is short and
+        #     starts with ``/`` (slash command discovery), which is
+        #     the only path that actually needs the popup. Bulk
+        #     pastes no longer fire 1000+ completer calls — paste
+        #     becomes instant again.
         from prompt_toolkit.filters import Condition  # noqa: PLC0415
         from prompt_toolkit.layout.processors import (  # noqa: PLC0415
             ConditionalProcessor,
             PasswordProcessor,
+        )
+
+        self._input_buffer = Buffer(
+            completer=completer,
+            history=history if history is not None else InMemoryHistory(),
+            multiline=True,
+            complete_while_typing=Condition(
+                lambda: (
+                    self._input_buffer.text.startswith("/") and len(self._input_buffer.text) < 80
+                )
+            ),
         )
 
         self._password_mode: list[bool] = [False]
@@ -315,7 +328,18 @@ class ChatApp:
                 ),
             ],
         )
-        self._input_inner = Window(self._input_control, height=1, wrap_lines=False)
+        # Slice 9: input window grows with content. ``height=Dimension(min=1)``
+        # means "at least one line, expand as needed"; ``wrap_lines=True``
+        # lets long lines fold instead of disappearing off the right edge;
+        # ``dont_extend_height=True`` caps growth at what's actually
+        # needed so the input frame doesn't gobble vertical space when
+        # the buffer is short.
+        self._input_inner = Window(
+            self._input_control,
+            height=Dimension(min=1),
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
         self._input_frame = Frame(self._input_inner, title=frame_title)
 
         # Stream window — dynamic height that grows with content. The
