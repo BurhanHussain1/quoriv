@@ -47,6 +47,7 @@ from quoriv.tools.git import (
     git_stash,
     git_status,
 )
+from quoriv.tools.regex_grep import regex_grep
 from quoriv.tools.tests import run_tests
 from quoriv.tools.web import web_fetch, web_search
 
@@ -61,6 +62,7 @@ QUORIV_TOOLS = [
     git_add,
     git_commit,
     git_stash,
+    regex_grep,
     run_tests,
     web_fetch,
     web_search,
@@ -79,6 +81,7 @@ __all__ = [
     "git_stash",
     "git_status",
     "go_to_definition",
+    "regex_grep",
     "run_tests",
     "web_fetch",
     "web_search",

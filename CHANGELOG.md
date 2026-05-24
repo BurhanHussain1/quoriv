@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.6.2] — 2026-05-24
+
+### Added
+
+- **`regex_grep` tool** — full Python regex search across the repo. DeepAgents' built-in `grep` is literal-substring only; `regex_grep` accepts arbitrary regex (`def \w+_test`, `^class\s+\w+\(.*Base.*\):`, etc.), an optional glob filter, case-insensitive flag, and a `max_matches` cap (default 200). Skips the usual noise dirs (`.git`, `.venv`, `node_modules`, `__pycache__`, `dist`, `build`, `target`, `.mypy_cache`, etc.) and binary files (UTF-8 decode error → skip). Registered in `QUORIV_TOOLS` so the agent picks it up automatically.
+
+### Changed
+
+- **`PROJECT_PLAN.md` status section rewritten** to reflect actual state. The doc was stuck at "Phase 1 Slice 1 complete"; reality is all four planned phases shipped + a Phase 5 (post-v1.0 UX polish) underway through v1.6.x. Open housekeeping (domain pick, telemetry vendor, plugin API end-to-end verification) called out explicitly.
+
+---
+
 ## [1.6.1] — 2026-05-24
 
 ### Fixed

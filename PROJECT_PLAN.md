@@ -509,29 +509,34 @@ Format for `PROJECT.md` and `memory.md`: free-form markdown (per Anthropic's AGE
 
 ## 15. Status
 
-**Current phase:** Phase 0 ✅ complete (Days 1–5). Phase 1 in progress — Slice 1 (permission modes) ✅ complete.
+**Current phase:** Phase 5 (post-v1.0 UX polish) — shipping. **All planned phases (0 → 4) are complete.** Latest release: **v1.6.2** on PyPI.
 
-**Test count:** 130 passing. All CI gates green: ruff, ruff format, mypy strict, pytest.
+**Test count:** ~285 passing across unit + integration. All CI gates green: ruff, ruff format, mypy strict, pytest.
 
-**Phase 0 deliverables:**
-- Day 1 ✅ Repo scaffold + CI
-- Day 2 ✅ Config layer + folder skeleton (Pydantic v2, TOML loader)
-- Day 3 ✅ OS keychain + model factory + OpenAI provider
-- Day 4 ✅ Typer CLI + Rich/prompt_toolkit chat loop (direct LLM streaming)
-- Day 5 ✅ DeepAgents wired with `LocalShellBackend` (full built-in toolset live)
+### Phases 0–4 — done
 
-**Phase 1 progress (9 slices total):**
-- Slice 1 ✅ Permission modes (4-mode → `interrupt_on=` translation, path-protection constants in canonical location)
-- Slice 1b ⬜ Custom `wrap_tool_call` middleware enforcing `PATH_PROTECTION` against the live agent (DeepAgents 0.6.1 doesn't accept `permissions=` with sandbox backends)
-- Slice 2 ⬜ Approval prompt UI for `interrupt_on` pauses
-- Slice 3 ⬜ Markdown-aware streaming + diff renderer
-- Slice 4 ⬜ Tree-sitter AST tools
-- Slice 5 ⬜ Git tools
-- Slice 6 ⬜ Language-aware test runner
-- Slice 7 ⬜ `SqliteSaver` checkpointer for session persistence
-- Slice 8 ⬜ Slash commands polish + status line
-- Slice 9 ⬜ Trace log + integration tests
+- **Phase 0 (Foundation)** ✅ Days 1–5 — repo, config, keychain, OpenAI provider, DeepAgents wired with `LocalShellBackend`.
+- **Phase 1 (Quoriv UX + tools)** ✅ all 9 slices — permission modes (+ Slice 1b `wrap_tool_call` middleware enforcing `PATH_PROTECTION`), approval prompts, streaming + diffs, AST tools (multi-language via tree-sitter), git tools (read + write), language-aware test runner, `AsyncSqliteSaver` session persistence, slash commands + status line, trace log + integration tests.
+- **Phase 2 (Memory + routing + plugins)** ✅ — `memory=` wiring (`PROJECT.md` + `~/.quoriv/memory.md`), subagents with per-task model routing, MCP client (`quoriv.plugins.mcp`), Python plugin API + entry-point loader, `/cost` dashboard, `SessionAllowlist` ("approve and remember") UX layer.
+- **Phase 3 (Multi-provider + polish)** ✅ — Anthropic, Gemini, Ollama, vLLM, OpenRouter providers; fallback chains; web tools (`web_search`, `web_fetch`); hooks system; replay mode; light/dark/auto themes; cross-platform CI matrix; eval harness.
+- **Phase 4 (Release)** ✅ — MkDocs documentation site, PyPI publish, PyInstaller binaries (Win/macOS/Linux), CI matrix, telemetry opt-in scaffold, `SECURITY.md`, `v1.0.0` shipped, all subsequent releases automated via tag-triggered workflow.
 
-**Architecture revision (still applies):** Adopted DeepAgents-reuse model after auditing the installed 0.6.1 SDK. `src/quoriv/memory/` removed. `core/`, `tools/`, `permissions/`, `repo/` scopes narrowed (see folder tree above).
+### Phase 5 — UX polish (post-v1.0, ongoing)
 
-**Next action:** Phase 1 Slice 2 — approval prompt UI. With Slice 1 done, the agent already pauses before risky tools; Slice 2 renders the pause as a user-facing prompt (approve / deny, with auto-deny in `read-only` mode).
+Not in the original plan; added once v1.0.0 was out and real users started exercising the chat loop.
+
+- **v1.1.0** — chat UX polish + bordered input box
+- **v1.2.x** — persistent prompt_toolkit Application (replaces per-turn Application + Rich Live), Float-based approval modal, fix user-input echo + checkpointer dep bump
+- **v1.3.x** — arrow-key option picker primitive for `/mode` / `/load`
+- **v1.4.x** — inline argument typeahead (`/mode<space>` opens `CompletionsMenu`), positioning fixes
+- **v1.5.x** — `/login` / `/setup` / `/logout` wizard + startup auto-onboarding; new providers: **DeepSeek, Kimi (Moonshot), xAI Grok** (OpenAI-compatible base_url wrappers); curated model registry; Claude-Code-style inline picker; HITL approval reuses the same picker; status-line model-id fix
+- **v1.6.x** — Claude-Code-style tool feedback (`• Reading /a.py`, todo-list checkbox renderer), thinking/reasoning blocks across providers (Anthropic `type=thinking`, OpenAI `type=reasoning`, DeepSeek/Kimi `additional_kwargs.reasoning_content`, inline `<think>` tags), rotating "Pondering… / Incubating…" status verb for non-reasoning models, multi-line input with fast paste, `regex_grep` tool
+
+### Open / housekeeping
+
+- [ ] Primary domain (`.dev` / `.sh` / `.ai`) — deferred since v1.0
+- [ ] Telemetry vendor (PostHog / Plausible / none) — scaffold in `quoriv.observability.telemetry` but no backend wired
+- [x] ~~`regex_grep` tool~~ — shipped in v1.6.2 (`quoriv.tools.regex_grep`)
+- [ ] Python plugin API end-to-end verification (loader + entry-point + an external test plugin)
+
+**Architecture revision (still applies):** DeepAgents-reuse model adopted after auditing the installed 0.6.1 SDK. No Quoriv module duplicates a DeepAgents feature; see [`docs/DEEPAGENTS_REFERENCE.md`](docs/DEEPAGENTS_REFERENCE.md) for the reuse map.
