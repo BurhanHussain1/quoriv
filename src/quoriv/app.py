@@ -1138,9 +1138,17 @@ async def _drive_turn(
     # compiled graph defaults to 9999, but that default is overridden
     # by whatever's in the RunnableConfig at invoke time, so we must
     # set it here explicitly.
+    #
+    # We set it to 10_000 — matching DeepAgents' own ceiling — so the
+    # agent can work like Claude Code on large codebases: read/list
+    # hundreds of files, run long multi-step edit-and-verify loops,
+    # and chain sub-agent delegations without ever hitting the cap in
+    # normal use. The bound is kept finite (not truly unbounded) only
+    # as a runaway-loop backstop — a model stuck calling tools forever
+    # still eventually stops instead of hanging the terminal.
     run_config: RunnableConfig = {
         "configurable": {"thread_id": thread_id},
-        "recursion_limit": 1000,
+        "recursion_limit": 10_000,
     }
     next_input: Any = {"messages": [HumanMessage(content=user_input)]}
     auto_deny = is_read_only(mode)

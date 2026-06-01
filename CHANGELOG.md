@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.6.4] — 2026-05-24
+
+### Changed
+
+- **Raised per-turn `recursion_limit` from 1000 to 10,000** (matching DeepAgents' graph ceiling), so the agent can work like Claude Code on large codebases — read/list hundreds of files, run long multi-step edit-and-verify loops, and chain sub-agent delegations without hitting the cap. Kept finite as a runaway-loop backstop rather than truly unbounded.
+
+---
+
 ## [1.6.3] — 2026-05-24
 
 ### Fixed
