@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.7.0] — 2026-05-24
+
+### Added — `/init` codebase onboarding
+
+- **`/init` slash command** — Claude-Code-style "understand this repo and write a memory file". Kicks off a canned, systematic exploration: the agent calls `write_todos` to plan, maps the structure with `ls` / `glob` / `regex_grep`, reads the important files **in batches** (so DeepAgents' `SummarizationMiddleware` keeps the context window healthy on large repos rather than trying to read everything at once), then writes a structured `PROJECT.md` at the repo root with Overview / Tech stack / Structure / Architecture / Conventions / Commands / Notable sections. If a `PROJECT.md` already exists, it reads and improves it instead of overwriting blind. Because `PROJECT.md` is auto-loaded into the system prompt every session via DeepAgents' `MemoryMiddleware`, running `/init` once makes every future session repo-aware.
+
+---
+
 ## [1.6.4] — 2026-05-24
 
 ### Changed

@@ -82,6 +82,7 @@ ALLOWED_MODES: tuple[PermissionMode, ...] = ("read-only", "ask", "auto", "yolo")
 
 SLASH_COMMANDS: dict[str, str] = {
     "/help": "List available slash commands",
+    "/init": "Explore the codebase and write a PROJECT.md memory file",
     "/clear": "Start a fresh conversation (new thread)",
     "/save": "Save the current thread under a name (default: first 8 chars of thread id)",
     "/load": "Switch to a saved thread by name (no arg lists saved sessions)",
@@ -113,6 +114,45 @@ _DEEPAGENTS_BUILTIN_TOOLS: tuple[tuple[str, str], ...] = (
     ("execute", "Run a shell command in the working directory"),
     ("task", "Delegate work to a sub-agent"),
 )
+
+
+_INIT_PROMPT: str = """\
+Explore this codebase and write a PROJECT.md file at the repository root \
+that future AI assistants (and you, in later sessions) can load as memory.
+
+Work systematically so you don't run out of context on a large repo:
+
+1. First call write_todos with a short plan for the exploration.
+2. Map the structure: list the root, then the main source directories. \
+Use glob and regex_grep to find entry points, config files, and the build/test setup.
+3. Read files in batches — read the most important files first \
+(entry points, core modules, config, package manifest). You do NOT need to \
+read every file; sample enough to understand the architecture, conventions, \
+and how the pieces fit together. Update your todos as you go.
+4. When you have enough understanding, write PROJECT.md with these sections:
+   - **Overview** — what the project does, in 2-3 sentences.
+   - **Tech stack** — languages, frameworks, key dependencies.
+   - **Structure** — the important directories and what each is for.
+   - **Architecture** — how the main pieces connect (request/data flow, \
+entry points, major modules).
+   - **Conventions** — naming, formatting, testing, and any patterns you \
+noticed that a contributor should follow.
+   - **Commands** — how to install, run, test, lint, and build.
+   - **Notable** — anything surprising, non-obvious, or important to know.
+
+Keep PROJECT.md concise and factual — it's loaded into the system prompt \
+every session, so favour signal over completeness. If a PROJECT.md already \
+exists, read it first and improve it rather than overwriting blindly.
+"""
+"""Canned exploration prompt for the ``/init`` slash command.
+
+Mirrors Claude Code's ``/init`` — kicks off a systematic, chunked
+codebase exploration that ends with a written ``PROJECT.md`` memory
+file. The prompt explicitly tells the agent to use ``write_todos``
+(so the user sees the plan) and to read files in batches rather than
+all at once (so DeepAgents' ``SummarizationMiddleware`` can keep the
+context window healthy on large repos).
+"""
 
 
 _MODE_DESCRIPTIONS: dict[PermissionMode, str] = {
@@ -377,8 +417,15 @@ async def _interactive_loop(  # noqa: PLR0915 — persistent chat loop owns its 
             lower_cmd = split_cmd[0].lower()
             cmd_arg = split_cmd[1].strip() if len(split_cmd) > 1 else ""
 
+            # ``/init`` → swap in the canned codebase-exploration prompt
+            # and fall through to the normal turn driver below (it's a
+            # regular agent turn, not a sync slash command).
+            if lower_cmd == "/init":
+                ui_console.print("[dim]Exploring the codebase and writing PROJECT.md…[/dim]")
+                user_input = _INIT_PROMPT
+
             # Bare ``/mode`` → inline mode picker.
-            if lower_cmd == "/mode" and not cmd_arg:
+            elif lower_cmd == "/mode" and not cmd_arg:
                 mode_options: list[tuple[str, str]] = [
                     (m, _MODE_DESCRIPTIONS[m]) for m in ALLOWED_MODES
                 ]
