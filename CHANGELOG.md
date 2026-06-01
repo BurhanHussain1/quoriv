@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.6.3] — 2026-05-24
+
+### Fixed
+
+- **`GRAPH_RECURSION_LIMIT` / "Recursion limit of 25 reached" on large-codebase tasks.** A turn that reads/lists many files (e.g. "understand my codebase") died after ~12 tool calls because the per-turn `RunnableConfig` didn't set `recursion_limit`, so LangGraph fell back to its built-in default of 25. (DeepAgents' compiled graph defaults to 9999, but that default is overridden by whatever's in the config at invoke time.) `_drive_turn` now sets `recursion_limit=1000` explicitly, so multi-step exploration and long agentic loops run to completion.
+
+---
+
 ## [1.6.2] — 2026-05-24
 
 ### Added

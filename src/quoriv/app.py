@@ -1130,7 +1130,18 @@ async def _drive_turn(
     ``approve_always`` at the prompt). ``None`` keeps the legacy "always
     prompt" behavior so existing test entry points stay unaffected.
     """
-    run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    # ``recursion_limit`` caps how many LangGraph super-steps (each
+    # model call + each tool call counts as one) a single turn may
+    # take. LangGraph's built-in default is 25 — far too low for
+    # "understand my codebase" style tasks that read/list dozens of
+    # files, so those die with GRAPH_RECURSION_LIMIT. DeepAgents'
+    # compiled graph defaults to 9999, but that default is overridden
+    # by whatever's in the RunnableConfig at invoke time, so we must
+    # set it here explicitly.
+    run_config: RunnableConfig = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 1000,
+    }
     next_input: Any = {"messages": [HumanMessage(content=user_input)]}
     auto_deny = is_read_only(mode)
 
